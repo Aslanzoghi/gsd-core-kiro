@@ -1,0 +1,99 @@
+{
+  "id": "kiro",
+  "role": "runtime",
+  "version": "1.15.0",
+  "title": "Kiro",
+  "description": "Kiro (kiro.dev) — IDE and CLI sharing one .kiro/ tree; flat skills at <root>/skills/<name>/SKILL.md (auto-activated by description, invocable as /<name>), Markdown custom agents with Kiro tool tags; profile-marker install, no shared hooks; tier-2 support.",
+  "tier": "core",
+  "requires": [],
+  "engines": {
+    "gsd": ">=1.6.0"
+  },
+  "runtime": {
+    "configHome": {
+      "kind": "dot-home",
+      "name": ".kiro",
+      "env": [
+        "KIRO_HOME",
+        "KIRO_CONFIG_DIR"
+      ]
+    },
+    "localConfigDir": ".kiro",
+    "configFormat": "none",
+    "artifactLayout": {
+      "global": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToKiroSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToKiroAgent"
+        }
+      ],
+      "local": [
+        {
+          "kind": "skills",
+          "destSubpath": "skills",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeCommandToKiroSkill"
+        },
+        {
+          "kind": "agents",
+          "destSubpath": "agents",
+          "prefix": "gsd-",
+          "nesting": "flat",
+          "recursive": false,
+          "converter": "convertClaudeAgentToKiroAgent"
+        }
+      ]
+    },
+    "triggerPrecedence": [
+      "skills",
+      "commands"
+    ],
+    "commandStyle": "slash-hyphen",
+    "hooksSurface": "none",
+    "sandboxTier": "none",
+    "supportTier": 2,
+    "installSurface": "profile-marker-only",
+    "writesSharedSettings": false,
+    "permissionWriter": null,
+    "extendedHookEvents": [],
+    "hostIntegration": {
+      "embeddingMode": "declarative",
+      "commandSurface": "slash-file",
+      "dispatch": {
+        "namedDispatch": true,
+        "nested": false,
+        "maxDepth": 1,
+        "background": "undocumented",
+        "subagentToolkit": "full",
+        "backgroundDispatch": "undocumented",
+        "isolation": "none",
+        "maxConcurrency": "undocumented"
+      },
+      "modelMode": "passive",
+      "hookBus": "host",
+      "stateIO": "filesystem",
+      "transport": "mcp",
+      "runtime": "undocumented",
+      "effortSurface": "undocumented"
+    },
+    "hostBehaviors": {
+      "skipSharedHooksInstall": true,
+      "skipCompactAgents": true,
+      "contentRewriteProfile": "slash-lookahead-own-derived"
+    }
+  }
+}

@@ -4413,9 +4413,10 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
   // are genuinely new agent converters (not renamed/leftover), so the agent
   // count grows from 11 to 14; the 16 command/skill/workflow converters are
   // unchanged.
-  test('VALID_CONVERTER_NAMES has exactly 30 entries (16 command/skill/workflow + 14 agent converters)', () => {
+  // Kiro: convertClaudeCommandToKiroSkill + convertClaudeAgentToKiroAgent → 17 + 15.
+  test('VALID_CONVERTER_NAMES has exactly 32 entries (17 command/skill/workflow + 15 agent converters)', () => {
     assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
-    assert.strictEqual(VALID_CONVERTER_NAMES.size, 30, 'VALID_CONVERTER_NAMES must have exactly 30 entries, got: ' + VALID_CONVERTER_NAMES.size);
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 32, 'VALID_CONVERTER_NAMES must have exactly 32 entries, got: ' + VALID_CONVERTER_NAMES.size);
   });
 
   test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
@@ -4450,6 +4451,8 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeAgentToQwenAgent',
       // #3384 — ZCode agent converter (strips mcp__* grants at install time).
       'convertClaudeAgentToZcodeAgent',
+      'convertClaudeAgentToKiroAgent',
+      'convertClaudeCommandToKiroSkill',
       // #2875 Part 2 (the agents-bypass closure) — data-driven Hermes branding
       // converter, and the kilo/opencode agent converters (shared name with
       // those runtimes' commands-kind entries).

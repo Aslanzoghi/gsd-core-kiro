@@ -778,8 +778,9 @@ function _copyStaged(stagedDir: string, destDir: string, kind: any, configDir: s
     // fallback). Staging them into Claude's agents directory shipped 29 dead
     // files whose `name:` frontmatter is identical to their canonical
     // sibling's, leaving the harness resolution unstated. Claude never
-    // selects compact, so claude is the one runtime whose agents kind skips
-    // them; every other runtime's emission is byte-identical. #5169: the
+    // selects compact, so claude's agents kind skips them; so does kiro's, whose
+    // custom agents are also registered by `name:` (two files, one name).
+    // Every other runtime's emission is byte-identical. #5169: the
     // descriptor declares this (`hostBehaviors.skipCompactAgents`), not a name test.
     if (kind.kind === 'agents' && hostBehaviorsFor(runtime).skipCompactAgents && entry.name.endsWith('.compact.md')) continue;
     const stem = entry.name.slice(0, -3); // strip .md

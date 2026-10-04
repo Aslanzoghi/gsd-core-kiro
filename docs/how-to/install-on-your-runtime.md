@@ -478,6 +478,20 @@ GSD's hook-automation and native-MCP-registration integrations are not yet wired
 
 ---
 
+### Kiro
+
+```bash
+npx @opengsd/gsd-core@latest --kiro --local    # this project's .kiro/
+npx @opengsd/gsd-core@latest --kiro --global   # ~/.kiro/ (or $KIRO_HOME)
+```
+
+[Kiro](https://kiro.dev)'s IDE and CLI (`kiro-cli`) read the same `.kiro/` tree, so one install serves both:
+
+- **Skills** → `.kiro/skills/gsd-<name>/SKILL.md`. Run one with `/gsd-<name> <args>`, or describe the task and Kiro activates the skill whose description matches.
+- **Custom agents** → `.kiro/agents/gsd-<name>.md`. GSD's tool grants become Kiro tool tags (`read`, `write`, `shell`, `web`, `subagent`, `@mcp`). The workflows delegate to these agents by name.
+
+GSD writes no settings file and no hooks for Kiro. Project instructions referenced as `CLAUDE.md` in the workflows point to `.kiro/steering/` instead. A Kiro install sits next to a Claude Code install in the same project: each runtime has its own directory and both read and write the same `.planning/` state, so you can switch between them mid-project. See the [`## kiro`](../reference/host-integration-capability-matrix.md#kiro) section of the host-integration capability matrix for the cited sources.
+
 ### pi
 
 ```bash

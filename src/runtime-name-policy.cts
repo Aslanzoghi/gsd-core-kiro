@@ -504,6 +504,7 @@ const RUNTIME_LABELS: Readonly<Record<string, string>> = {
   codebuddy: 'CodeBuddy',
   cline: 'Cline',
   zcode: 'ZCode',
+  kiro: 'Kiro',
   pi: 'pi',
   // #2103: vscode is a registered (role:runtime) capability for validator +
   // host-integration coverage, even though it is never CLI-installed (no
@@ -560,6 +561,7 @@ const GLOBAL_CONFIG_HOME_FRAGMENTS: Readonly<Record<string, string>> = {
   kimi:      "'.config', 'agents'",
   'kimi-code': "'.kimi-code'",
   zcode:     "'.zcode'",
+  kiro:      "'.kiro'",
   // pi's global config home is ~/.pi/agent (configHome: dot-home-nested,
   // parent '.pi', name 'agent' — capabilities/pi/capability.json), matching
   // resolveConfigHomeFromDescriptor's `path.join(home, parent, name)` for the
@@ -595,7 +597,7 @@ export function getGlobalConfigHomeFragment(runtime: string): string {
 // folds the shared-hooks-install skip).
 const RUNTIME_FLAG_IDS = Object.freeze([
   'opencode', 'kilo', 'codex', 'copilot', 'antigravity', 'cursor',
-  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'kimi-code', 'zcode', 'pi',
+  'windsurf', 'augment', 'trae', 'qwen', 'hermes', 'codebuddy', 'cline', 'kimi', 'kimi-code', 'zcode', 'kiro', 'pi',
 ] as const);
 
 /**

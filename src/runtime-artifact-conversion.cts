@@ -1709,6 +1709,141 @@ function convertClaudeCommandToCodebuddyCommand(content, commandName) {
   return lines.join('\n');
 }
 
+// ── Kiro converters ─────────────────────────────────────────────────────────
+//
+// Kiro (kiro.dev) is an IDE + CLI pair that share one config tree: `.kiro/` in
+// the workspace and `~/.kiro/` globally (`KIRO_HOME` relocates the global one).
+//   Skills — https://kiro.dev/docs/skills: `<root>/skills/<name>/SKILL.md`,
+//     `name` must match the folder, `description` (max 1024 chars) is what Kiro
+//     matches requests against; a skill also answers to `/<name> <args>`.
+//   Agents — https://kiro.dev/docs/custom-agents/configuration-reference:
+//     `<root>/agents/`, Markdown with frontmatter for config and the body as the
+//     system prompt; `tools` takes Kiro's tool tags (read, write, shell, web,
+//     subagent, @mcp, @builtin, *), not Claude tool names.
+
+/** Kiro skill descriptions may run to 1024 characters (kiro.dev/docs/skills). */
+const KIRO_SKILL_DESCRIPTION_MAX = 1024;
+
+function convertClaudeToKiroMarkdown(content) {
+  let converted = filterRuntimeNotesForTarget(content, 'kiro');
+  converted = converted.replace(/\/gsd:([a-z0-9-]+)/g, (_, commandName) => `/gsd-${commandName}`);
+  converted = converted.replace(/\bBash\(/g, 'shell(');
+  converted = converted.replace(/\bEdit\(/g, 'write(');
+  converted = converted.replace(/\bAskUserQuestion\b/g, 'conversational prompting');
+  converted = converted.replace(/\$ARGUMENTS\b/g, '{{GSD_ARGS}}');
+  // Kiro's project-instruction surface is its steering directory.
+  converted = converted.replace(/`\.\/CLAUDE\.md`/g, '`.kiro/steering/`');
+  converted = converted.replace(/\.\/CLAUDE\.md/g, '.kiro/steering/');
+  converted = converted.replace(/`CLAUDE\.md`/g, '`.kiro/steering/`');
+  converted = converted.replace(/\bCLAUDE\.md\b/g, '.kiro/steering/');
+  converted = converted.replace(/\.claude\/skills\//g, '.kiro/skills/');
+  converted = converted.replace(/\*\*Known Claude Code bug \(classifyHandoffIfNeeded\):\*\*[^\n]*\n/g, '');
+  converted = converted.replace(/- \*\*classifyHandoffIfNeeded false failure:\*\*[^\n]*\n/g, '');
+  // #2284(b): skips <runtime_compatibility> comparison-table content (protected region).
+  converted = applyClaudeCodeBrandSwap(converted, 'Kiro');
+  return converted;
+}
+
+function getKiroSkillAdapterHeader(skillName) {
+  return `<kiro_skill_adapter>
+## A. Skill Invocation
+- This skill runs when the user types \`/${skillName}\` or describes a task matching this skill.
+- Treat all user text after the skill name as \`{{GSD_ARGS}}\`.
+- If no arguments are present, treat \`{{GSD_ARGS}}\` as empty.
+
+## B. User Prompting
+When the workflow needs user input, prompt the user conversationally:
+- Present options as a numbered list in your response text
+- Ask the user to reply with their choice
+- For multi-select, ask for comma-separated numbers
+
+## C. Tool Usage
+Use these Kiro tools when executing GSD workflows:
+- \`shell\` for running commands
+- \`read\` for reading, listing and searching files
+- \`write\` for creating and editing files
+- \`web\` for web search and fetch
+
+## D. Subagent Spawning
+When the workflow spawns a named GSD agent (\`gsd-planner\`, \`gsd-executor\`, ...), delegate to
+the custom agent of that name in \`.kiro/agents/\` with the \`subagent\` tool. Sub-agents cannot
+spawn further sub-agents, so run nested steps inline.
+</kiro_skill_adapter>`;
+}
+
+function convertClaudeCommandToKiroSkill(content, skillName) {
+  const converted = convertClaudeToKiroMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  let description = `Run GSD workflow ${skillName}.`;
+  if (frontmatter) {
+    const maybeDescription = extractFrontmatterField(frontmatter, 'description');
+    if (maybeDescription) {
+      description = maybeDescription;
+    }
+  }
+  description = toSingleLine(description);
+  if (description.length > KIRO_SKILL_DESCRIPTION_MAX) {
+    description = `${description.slice(0, KIRO_SKILL_DESCRIPTION_MAX - 3)}...`;
+  }
+  return `---\nname: ${yamlIdentifier(skillName)}\ndescription: ${yamlQuote(description)}\n---\n\n${getKiroSkillAdapterHeader(skillName)}\n\n${body.trimStart()}`;
+}
+
+/**
+ * Claude tool name → Kiro tool tag. `null` drops the grant: Kiro has no tool for
+ * it (skills are resources, questions are conversational, todos are host UI).
+ * An `mcp__*` grant becomes `@mcp`, Kiro's tag for the configured MCP tools.
+ */
+const claudeToKiroTools: Readonly<Record<string, string | null>> = {
+  Read: 'read',
+  Glob: 'read',
+  Grep: 'read',
+  LS: 'read',
+  Write: 'write',
+  Edit: 'write',
+  MultiEdit: 'write',
+  NotebookEdit: 'write',
+  Bash: 'shell',
+  WebSearch: 'web',
+  WebFetch: 'web',
+  Task: 'subagent',
+  Agent: 'subagent',
+  Skill: null,
+  AskUserQuestion: null,
+  TodoWrite: null,
+  SlashCommand: null,
+};
+
+function convertKiroToolName(claudeTool: string): string | null {
+  if (claudeTool.startsWith('mcp__')) return '@mcp';
+  return Object.prototype.hasOwnProperty.call(claudeToKiroTools, claudeTool) ? claudeToKiroTools[claudeTool] : null;
+}
+
+/**
+ * Convert a Claude Code agent .md to a Kiro custom agent .md: `name` and
+ * `description` carry over, the `tools` grant list is mapped to Kiro tool tags
+ * (deduplicated, source order kept), and Claude-only keys (color, hooks, skills)
+ * are dropped. An agent with no `tools` key, or whose grants all map to nothing,
+ * emits no `tools` key so it keeps Kiro's default toolkit.
+ */
+function convertClaudeAgentToKiroAgent(content) {
+  const converted = convertClaudeToKiroMarkdown(content);
+  const { frontmatter, body } = extractFrontmatterAndBody(converted);
+  if (!frontmatter) return converted;
+
+  const name = extractFrontmatterField(frontmatter, 'name') || 'unknown';
+  const description = extractFrontmatterField(frontmatter, 'description') || '';
+  const tools = [];
+  for (const tool of parseFrontmatterTools(frontmatter)) {
+    const mapped = convertKiroToolName(tool);
+    if (mapped && !tools.includes(mapped)) tools.push(mapped);
+  }
+
+  let fm = `---\nname: ${yamlIdentifier(name)}\ndescription: ${yamlQuote(toSingleLine(description))}\n`;
+  if (tools.length > 0) fm += `tools: [${tools.map((tool) => yamlQuote(tool)).join(', ')}]\n`;
+  fm += '---';
+  return `${fm}\n${body}`;
+}
+
 // ── Cline converters ────────────────────────────────────────────────────────
 
 function convertClaudeToCliineMarkdown(content) {
@@ -4112,6 +4247,11 @@ export = {
   // conversionExports[converterName] dispatch, resolved from
   // capabilities/zcode/capability.json's agents kind.
   convertClaudeAgentToZcodeAgent,
+  // Kiro skills (.kiro/skills/<name>/SKILL.md) and custom agents (.kiro/agents/*.md),
+  // resolved by name from capabilities/kiro/capability.json.
+  convertClaudeToKiroMarkdown,
+  convertClaudeCommandToKiroSkill,
+  convertClaudeAgentToKiroAgent,
   // #1511 ADR-1508 Phase 2: rewrite engine deep seam
   // Low-level walkers (pathPrefix + attribution pre-resolved by caller):
   applyRuntimeContentRewritesInPlace,

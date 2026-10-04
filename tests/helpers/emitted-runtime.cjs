@@ -721,6 +721,11 @@ function currentManifests({ repoRoot } = {}) {
   const pkgVersion = measuredPackageVersion(repoRoot);
   const manifests = {};
   for (const { name, runtime, scope } of MANIFEST_FAMILIES) {
+    // A measured tree with no descriptor for this runtime (a base ref that predates the
+    // runtime) never emitted the family; installing it there would measure whatever the
+    // older installer falls back to. Omit it, so the family reads as ADDED on this
+    // branch — reconcileFamilies' job — rather than as a tree that drifted.
+    if (repoRoot !== undefined && !fs.existsSync(path.join(repoRoot, 'capabilities', runtime, 'capability.json'))) continue;
     const { configDir, root } = runMinimalInstall({ runtime, scope, installScript });
     try {
       manifests[name] = buildParityManifest(configDir, root, {

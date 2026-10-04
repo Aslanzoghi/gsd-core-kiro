@@ -292,7 +292,6 @@ describe('descriptor-declared install behaviors replaced the name tests', () => 
 
   test('Claude-only behaviors are declared by claude and by no other runtime', () => {
     for (const key of [
-      'skipCompactAgents',
       'omitBashRunnerOnWindows',
       'specRootSkillPass',
       'restoreAtRefTildeInAgents',
@@ -300,6 +299,10 @@ describe('descriptor-declared install behaviors replaced the name tests', () => 
     ]) {
       assert.deepEqual(declares(key), ['claude'], key);
     }
+  });
+
+  test('compact agent variants are skipped where agents register by name (claude, kiro)', () => {
+    assert.deepEqual(declares('skipCompactAgents'), ['claude', 'kiro']);
   });
 
   test('single-host behaviors are declared by their one host', () => {

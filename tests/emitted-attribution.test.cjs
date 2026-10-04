@@ -1852,7 +1852,7 @@ test('floor is enforced at limit-1 / limit / limit+1', () => {
   assert.equal(below.ok, false);
   assert.ok(codesOf(below).includes(FAMILY_REASON.BELOW_FLOOR));
 
-  assert.deepEqual(reconcileWith({}), { ok: true, errors: [] });      // limit == 19
+  assert.deepEqual(reconcileWith({}), { ok: true, errors: [] });      // limit == 20
 
   const above = reconcileWith({
     derivedNames: twenty, baselineNames: twenty, currentNames: twenty,
@@ -2387,9 +2387,16 @@ test('differential attribution over the real tree', { timeout: HEAVY_REAL_TREE_T
       .join('\n  '),
   );
 
+  // A family ADDED on this branch has no "before" to diff its paths against; the
+  // reconciliation above already required the registry change that adds it. Per-path
+  // drift is measured over the families present on both sides (a REMOVED family still
+  // flows through, so its paths are reported as removed).
+  const comparableCurrent = Object.fromEntries(
+    Object.entries(current).filter(([name]) => Object.prototype.hasOwnProperty.call(baseline, name)),
+  );
   const result = diffEmitted({
     baseline,
-    current,
+    current: comparableCurrent,
     changedPaths,
     ackHash,
     ackGrowth,

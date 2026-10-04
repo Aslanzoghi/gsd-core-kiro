@@ -74,7 +74,7 @@ const RUNTIME_IDS = Object.keys(registry.runtimes);
 
 // Contract-pinned profile split (derived from .host-cli-final.json):
 // programmatic-cli: claude, cline, cursor, hermes, kilo, kimi, opencode, pi, qwen, trae (10)
-// declarative-cli:  antigravity, augment, codebuddy, codex, copilot, kimi-code, windsurf, zcode (8)
+// declarative-cli:  antigravity, augment, codebuddy, codex, copilot, kimi-code, kiro, windsurf, zcode (9)
 // kimi-code moved programmatic-cli → declarative-cli in #2603: its plugin surface is a
 // `kimi.plugin.json` manifest plus markdown Skills with no in-process programmatic API
 // (docs/en/customization/plugins.md), the same shape as codex. The value had been inherited
@@ -99,6 +99,7 @@ const EXPECTED_PROFILES = {
   'kimi-code': 'declarative-cli',
   windsurf:    'declarative-cli',
   zcode:       'declarative-cli',
+  kiro:        'declarative-cli',
   vscode:      'ide',
 };
 
@@ -350,6 +351,10 @@ describe('ADR-1239 Phase A: hostIntegration descriptors', () => {
     trae:        true,
     windsurf:    true,
     zcode:       true,
+    // Kiro: dispatch.background/backgroundDispatch are 'undocumented' (sub-agents
+    // run in parallel per kiro.dev, but no background primitive is documented)
+    // and nested:false → fails closed → force-flattened.
+    kiro:        true,
     // #2103: vscode's dispatch.backgroundDispatch is 'undocumented' (no
     // documented background-subagent primitive) → fails closed to false →
     // force-flattened, mirroring the pi (#2102) precedent above.

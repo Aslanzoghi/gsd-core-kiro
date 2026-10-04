@@ -769,6 +769,47 @@ EoS migration status (#2101, ADR-1239): ZCode's install is fully dogfooded throu
 
 ---
 
+## kiro
+
+> Kiro (kiro.dev) is an agentic IDE plus a CLI (`kiro-cli`) that share one configuration tree: `.kiro/` in the workspace and `~/.kiro/` globally, relocatable with `KIRO_HOME`. GSD installs flat skills (`<root>/skills/gsd-*/SKILL.md`) and Markdown custom agents (`<root>/agents/gsd-*.md`). No settings file or hook config is written. All values below are sourced from the official Kiro docs.
+
+| Axis | Value | Source | Evidence |
+|---|---|---|---|
+| embeddingMode | declarative | https://kiro.dev/docs/custom-agents/configuration-reference/ | Agents are configuration files ("Agents support both JSON and Markdown formats ... Frontmatter for config, body for system prompt"); skills are `SKILL.md` files. No in-process programmatic extension API is documented. |
+| commandSurface | slash-file | https://kiro.dev/docs/skills/ | Skills are `.kiro/skills/<name>/SKILL.md` files; users can "Type `/` followed by the skill name to invoke it directly". |
+| modelMode | passive | https://kiro.dev/docs/custom-agents/configuration-reference/ | `model` is a per-agent field: "If not specified, the agent will use the default model." No programmatic model request API is documented. |
+| hookBus | host | https://kiro.dev/docs/custom-agents/configuration-reference/ | `hooks` — "commands at lifecycle triggers (`agentSpawn`, `preToolUse`, `postToolUse`)": the host fires the events. GSD does not wire them (`hooksSurface: none`). |
+| stateIO | filesystem | https://kiro.dev/docs/skills/ | Workspace `.kiro/skills/` and global `~/.kiro/skills/` are plain directories on the local filesystem. |
+| transport | mcp | https://kiro.dev/docs/custom-agents/configuration-reference/ | `mcpServers` — "MCP server definitions"; the `@mcp` tool tag grants "all MCP tools from mcp.json". |
+| runtime | undocumented | searched: https://kiro.dev/docs/custom-agents/configuration-reference/ | Kiro ships an IDE and a separate CLI binary; neither documents a plugin runtime for extensions GSD would load. |
+| effortSurface | undocumented | no authoritative doc — per-host reasoning-effort survey, #2481 | The Kiro docs state no reasoning-effort setting (`kiro-cli chat` documents no effort flag), so the axis carries the fail-closed sentinel. |
+| dispatch.namedDispatch | true | https://kiro.dev/docs/custom-agents/subagents/ | "When you delegate to a custom agent, the sub-agent uses that agent's `tools` and `permissions` configuration" — delegation targets a named custom agent. |
+| dispatch.nested | false | https://kiro.dev/docs/custom-agents/subagents/ | Sub-agents cannot spawn other sub-agents in standard operation; only an agent configured with the `subagent` tool can delegate. |
+| dispatch.maxDepth | 1 | https://kiro.dev/docs/custom-agents/subagents/ | Follows from `nested: false`: the main agent delegates one level. |
+| dispatch.background | undocumented | searched: https://kiro.dev/docs/custom-agents/subagents/ | "Sub-agents run in parallel, each working independently", but no background (non-blocking) dispatch primitive is documented. |
+| dispatch.subagentToolkit | full | https://kiro.dev/docs/custom-agents/subagents/ | "The default sub-agent has the same built-in tools as the main agent - `read`, `write`, `shell`, `web_search`, `web_fetch`, and any configured MCP tools." |
+| dispatch.backgroundDispatch | undocumented | searched: https://kiro.dev/docs/custom-agents/subagents/ | No documented background-dispatch primitive; fails closed to `false` in negotiation. |
+| dispatch.isolation | none | https://kiro.dev/docs/custom-agents/subagents/ | No worktree or other per-sub-agent isolation is documented. |
+| dispatch.maxConcurrency | undocumented | searched: https://kiro.dev/docs/custom-agents/subagents/ | Parallel sub-agents are documented but no concurrency bound is stated; fails closed to `1` in negotiation (#3673). |
+
+Sources consulted:
+- https://kiro.dev/docs/skills/
+- https://kiro.dev/docs/custom-agents/subagents/
+- https://kiro.dev/docs/custom-agents/configuration-reference/
+- https://kiro.dev/docs/reference/cli-commands/
+- https://github.com/kirodotdev/Kiro/issues/9148 (`KIRO_HOME` relocates the global `~/.kiro` tree)
+
+Install notes:
+- Agent tool grants are mapped from Claude tool names to Kiro tool tags (`Read`/`Glob`/`Grep` → `read`, `Write`/`Edit` → `write`, `Bash` → `shell`, `WebSearch`/`WebFetch` → `web`, `Task`/`Agent` → `subagent`, `mcp__*` → `@mcp`); `Skill`, `AskUserQuestion` and `TodoWrite` have no Kiro tool and are dropped.
+- Compact agent variants are not installed (`hostBehaviors.skipCompactAgents`): they share their canonical sibling's `name:` and Kiro registers custom agents by name.
+- `KIRO_CONFIG_DIR` is also honoured (after `KIRO_HOME`) for installs made by the gsd-for-kiro fork.
+
+Documentation gaps:
+- dispatch.background / backgroundDispatch / maxConcurrency — parallel sub-agents are documented, but no background primitive or concurrency bound.
+- Precedence — Kiro documents that "workspace skills take priority over global skills"; GSD's install-time shadow report models global-wins for every host, so its warning overstates shadowing for Kiro.
+
+---
+
 ## pi
 
 > pi (pi.dev) is a bun-runtime Programmatic-CLI: it exposes an in-process TypeScript `ExtensionAPI` (`registerCommand`/`registerTool`/`registerProvider`/`pi.on`) rather than a settings-file or slash-markdown surface. GSD ships a single native-extension file (`pi/gsd.cjs`) installed to `~/.pi/agent/extensions/gsd.js` (global) or `.pi/extensions/gsd.js` (local) — the programmatic-CLI peer of the OpenCode/Kilo native-plugin binding. **Sourcing note:** the citations below are the pi.dev documentation pages named in ADR-1239 Stage 1 (#2102) as the source for each axis; this environment did not have live doc-fetch access at authoring time, so the Evidence column below is a paraphrase of pi's documented extension model rather than a verbatim excerpt — a maintainer with Context7/web access should verify the exact wording before treating this section as fully cited (flagged in the #2102 PR). **Partially discharged (#2470, 2026-07-20):** pi's extension-loader contract specifically has now been read at source — `packages/coding-agent/src/core/extensions/loader.ts` in `earendil-works/pi` — confirming `discoverExtensionsInDir()` keeps only names passing `isExtensionFile()` (`.ts`/`.js`, everything else skipped silently), that accepted files load via `jiti` (CommonJS and ESM alike), and that explicit `settings.json` paths bypass the filter. The remaining axes below are still paraphrase.

@@ -76,6 +76,8 @@ const RUNTIME_INSTALL_CONTRACTS = {
   // #1821: ZCode (hooksSurface:none, no plugin surface) no longer receives the
   // dead hook scripts or the CommonJS package.json marker.
   zcode: { surface: 'flat-skills', settings: false, hooksPackageJson: false },
+  // Kiro: skills + agents under .kiro/, no settings file, skipSharedHooksInstall.
+  kiro: { surface: 'flat-skills', settings: false, hooksPackageJson: false },
 };
 
 function sha256(content) {

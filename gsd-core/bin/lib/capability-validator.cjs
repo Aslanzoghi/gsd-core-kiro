@@ -855,6 +855,7 @@ const VALID_CONVERTER_NAMES = new Set([
   'convertClaudeCommandToKiloSkill',
   'convertClaudeCommandToKimiSkill',
   'convertClaudeCommandToKimiCodeSkill',
+  'convertClaudeCommandToKiroSkill',
   'convertClaudeCommandToOpencodeSkill',
   'convertClaudeCommandToTraeSkill',
   'convertClaudeCommandToWindsurfSkill',
@@ -874,6 +875,8 @@ const VALID_CONVERTER_NAMES = new Set([
   // #3384 — ZCode agents are Claude-shaped but its dispatcher treats mcp__* tools
   // grants as required MCP servers; this converter strips them at install time.
   'convertClaudeAgentToZcodeAgent',
+  // Kiro custom agents (.kiro/agents/*.md) — Claude tool grants mapped to Kiro tool tags.
+  'convertClaudeAgentToKiroAgent',
   // #2875 Part 2 (the agents-bypass closure) — data-driven Hermes branding
   // converter (reads hostBehaviors.brandingRewrites rather than a hardcode),
   // and the kilo/opencode agent converters (shared with those runtimes'

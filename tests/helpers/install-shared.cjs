@@ -80,6 +80,7 @@ const RUNTIME_META = {
   trae:         { localDir: '.trae',             globalSuffix: '.trae' },
   windsurf:     { localDir: '.windsurf',          globalSuffix: path.join('.codeium', 'windsurf') },
   zcode:        { localDir: '.zcode',             globalSuffix: '.zcode' },
+  kiro:         { localDir: '.kiro',              globalSuffix: '.kiro' },
 };
 
 /**
@@ -116,7 +117,7 @@ const MANIFEST_FAMILIES = [
  * derived — it ratchets, and lowering it is a deliberate, reviewable act. It never
  * blocks ADDING a runtime, which is the asymmetry the old shared literal lacked.
  */
-const MINIMUM_MANIFEST_FAMILIES = 19;
+const MINIMUM_MANIFEST_FAMILIES = 20;
 
 // Runtimes that emit per-skill files under skills/ (not rules-based or commands-based)
 const SKILL_RUNTIMES = [
