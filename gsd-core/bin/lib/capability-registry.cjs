@@ -2416,7 +2416,7 @@ const capabilities = {
   "kiro": {
     "id": "kiro",
     "role": "runtime",
-    "version": "1.15.0",
+    "version": "1.16.0",
     "title": "Kiro",
     "description": "Kiro (kiro.dev) — IDE and CLI sharing one .kiro/ tree; flat skills at <root>/skills/<name>/SKILL.md (auto-activated by description, invocable as /<name>), Markdown custom agents with Kiro tool tags; profile-marker install, no shared hooks; tier-2 support.",
     "tier": "core",
@@ -7266,7 +7266,7 @@ const runtimes = {
   "kiro": {
     "id": "kiro",
     "role": "runtime",
-    "version": "1.15.0",
+    "version": "1.16.0",
     "title": "Kiro",
     "description": "Kiro (kiro.dev) — IDE and CLI sharing one .kiro/ tree; flat skills at <root>/skills/<name>/SKILL.md (auto-activated by description, invocable as /<name>), Markdown custom agents with Kiro tool tags; profile-marker install, no shared hooks; tier-2 support.",
     "tier": "core",
