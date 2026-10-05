@@ -49,12 +49,16 @@ function deriveIdentity(pkg = {}) {
   const binName = pkg.bin ? Object.keys(pkg.bin)[0] || '' : '';
   const repoSlug = parseRepoSlug(pkg.repository);
   const repoUrl = repoSlug ? `https://github.com/${repoSlug}` : '';
+  // A fork may publish from a branch other than main; package.json
+  // `gsd.changelogBranch` names it so the update preview finds its changelog.
+  const changelogBranch = (pkg.gsd && pkg.gsd.changelogBranch) || 'main';
   const changelogRawUrl = repoSlug
-    ? `https://raw.githubusercontent.com/${repoSlug}/main/CHANGELOG.md`
+    ? `https://raw.githubusercontent.com/${repoSlug}/${changelogBranch}/CHANGELOG.md`
     : '';
+  const changelogUrl = repoSlug ? `${repoUrl}/blob/${changelogBranch}/CHANGELOG.md` : '';
   const cacheSlug = slugifyPackageName(packageName);
   const updateCacheFileName = cacheSlug ? `gsd-update-check-${cacheSlug}.json` : 'gsd-update-check.json';
-  return { packageName, binName, repoSlug, repoUrl, changelogRawUrl, cacheSlug, updateCacheFileName };
+  return { packageName, binName, repoSlug, repoUrl, changelogRawUrl, changelogUrl, cacheSlug, updateCacheFileName };
 }
 
 /**
@@ -81,7 +85,7 @@ const GENERATED_HEADER =
  * runtime command builder is byte-identical to the tested source above.
  */
 function render(identity) {
-  const { packageName, binName, repoSlug, repoUrl, changelogRawUrl, cacheSlug, updateCacheFileName } = identity;
+  const { packageName, binName, repoSlug, repoUrl, changelogRawUrl, changelogUrl, cacheSlug, updateCacheFileName } = identity;
   const j = (v) => JSON.stringify(v);
   return (
     GENERATED_HEADER +
@@ -91,6 +95,7 @@ function render(identity) {
     `const repoSlug = ${j(repoSlug)};\n` +
     `const repoUrl = ${j(repoUrl)};\n` +
     `const changelogRawUrl = ${j(changelogRawUrl)};\n` +
+    `const changelogUrl = ${j(changelogUrl)};\n` +
     `const cacheSlug = ${j(cacheSlug)};\n` +
     `const updateCacheFileName = ${j(updateCacheFileName)};\n\n` +
     `${formatManualInstall.toString()}\n\n` +
@@ -106,6 +111,7 @@ function render(identity) {
     '  repoSlug,\n' +
     '  repoUrl,\n' +
     '  changelogRawUrl,\n' +
+    '  changelogUrl,\n' +
     '  cacheSlug,\n' +
     '  updateCacheFileName,\n' +
     '  manualInstallCommand,\n' +

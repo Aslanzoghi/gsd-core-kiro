@@ -180,6 +180,16 @@ describe('Issue #498: deriveIdentity (pure, package.json -> coordinates)', () =>
     assert.equal(deriveIdentity(FAKE_PKG).repoUrl, 'https://github.com/acme/example-pkg');
   });
 
+  test('package.json gsd.changelogBranch moves both changelog URLs off main', () => {
+    const id = deriveIdentity({ ...FAKE_PKG, gsd: { changelogBranch: 'release/x' } });
+    assert.equal(id.changelogRawUrl, 'https://raw.githubusercontent.com/acme/example-pkg/release/x/CHANGELOG.md');
+    assert.equal(id.changelogUrl, 'https://github.com/acme/example-pkg/blob/release/x/CHANGELOG.md');
+  });
+
+  test('changelogUrl defaults to the main-branch CHANGELOG page', () => {
+    assert.equal(deriveIdentity(FAKE_PKG).changelogUrl, 'https://github.com/acme/example-pkg/blob/main/CHANGELOG.md');
+  });
+
   test('changelogRawUrl points at raw.githubusercontent main CHANGELOG', () => {
     assert.equal(
       deriveIdentity(FAKE_PKG).changelogRawUrl,

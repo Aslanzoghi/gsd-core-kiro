@@ -82,6 +82,7 @@ GSD_PACKAGE="$(id_field packageName)"; GSD_PACKAGE="${GSD_PACKAGE:-@opengsd/gsd-
 GSD_BIN="$(id_field binName)"; GSD_BIN="${GSD_BIN:-gsd-core}"
 GSD_REPO_URL="$(id_field repoUrl)"; GSD_REPO_URL="${GSD_REPO_URL:-https://github.com/open-gsd/gsd-core}"
 GSD_CHANGELOG_URL="$(id_field changelogRawUrl)"; GSD_CHANGELOG_URL="${GSD_CHANGELOG_URL:-https://raw.githubusercontent.com/open-gsd/gsd-core/main/CHANGELOG.md}"
+GSD_CHANGELOG_PAGE="$(id_field changelogUrl)"; GSD_CHANGELOG_PAGE="${GSD_CHANGELOG_PAGE:-$GSD_REPO_URL/blob/main/CHANGELOG.md}"
 
 echo "$INSTALLED_VERSION"
 echo "$INSTALL_SCOPE"
@@ -91,6 +92,7 @@ echo "$GSD_PACKAGE"
 echo "$GSD_BIN"
 echo "$GSD_REPO_URL"
 echo "$GSD_CHANGELOG_URL"
+echo "$GSD_CHANGELOG_PAGE"
 ```
 
 Parse output:
@@ -98,7 +100,7 @@ Parse output:
 - Line 2 = install scope (`LOCAL`, `GLOBAL`, or `UNKNOWN`)
 - Line 3 = target runtime (`claude`, `opencode`, `kilo`, `codex`, `antigravity`, `windsurf`); empty when no installed target is resolved
 - Line 4 = resolved GSD config dir (e.g. `/Users/me/.claude`, `/Users/me/.gemini/antigravity`); empty when no installed target is resolved. Capture this as `GSD_DIR` and pass it to subsequent steps so they don't re-derive the runtime path.
-- Lines 5-8 = this install's package coordinates: `GSD_PACKAGE` (npm package name), `GSD_BIN` (installer bin), `GSD_REPO_URL`, `GSD_CHANGELOG_URL`. Capture all four and use them wherever later steps install, link, or fetch the changelog — never substitute a package name of your own (#2992).
+- Lines 5-9 = this install's package coordinates: `GSD_PACKAGE` (npm package name), `GSD_BIN` (installer bin), `GSD_REPO_URL`, `GSD_CHANGELOG_URL` (raw changelog), `GSD_CHANGELOG_PAGE` (changelog web page). Capture all five and use them wherever later steps install, link, or fetch the changelog — never substitute a package name of your own (#2992).
 
 `update-context` reproduces the previous detection cascade — preferred-config-dir fast path, local-over-global with same-path dedup (so `CWD=$HOME` does not misdetect as LOCAL), env-var overrides (`CLAUDE_CONFIG_DIR`, `OPENCODE_CONFIG_DIR`, `KILO_CONFIG`, `XDG_CONFIG_HOME`, `CODEX_HOME`, …), and semver validation — but as a tested projection rather than ~280 lines of inline bash. Branch coverage lives in `tests/update-context.test.cjs`.
 
@@ -510,7 +512,7 @@ Format completion message (changelog was already shown in confirmation step):
 
 ⚠️  Restart your runtime to pick up the new commands.
 
-[View full changelog]({GSD_REPO_URL}/blob/main/CHANGELOG.md)
+[View full changelog]({GSD_CHANGELOG_PAGE})
 ```
 </step>
 

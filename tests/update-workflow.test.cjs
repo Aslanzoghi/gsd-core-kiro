@@ -195,11 +195,11 @@ test('issue #815: version check threads the tag through check-latest-version.cjs
 
 test('package coordinates come from the install identity, so a renamed package updates from itself', () => {
   assert.match(WF, /gsd-core\/bin\/lib\/package-identity\.cjs/);
-  for (const field of ['packageName', 'binName', 'repoUrl', 'changelogRawUrl']) {
+  for (const field of ['packageName', 'binName', 'repoUrl', 'changelogRawUrl', 'changelogUrl']) {
     assert.match(WF, new RegExp(`id_field ${field}\\)`), `update.md must read ${field} from the identity`);
   }
   assert.match(WF, /curl -fsSL "\$GSD_CHANGELOG_URL"/, 'changelog must come from the identity, not upstream');
-  assert.match(WF, /\[View full changelog\]\(\{GSD_REPO_URL\}/);
+  assert.match(WF, /\[View full changelog\]\(\{GSD_CHANGELOG_PAGE\}\)/);
 });
 
 test('issue #815: install uses the selected tag, not a hardcoded @latest', () => {

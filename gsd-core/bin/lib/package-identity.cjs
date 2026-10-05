@@ -7,7 +7,8 @@ const packageName = "@aslanzoghi/gsd-core-kiro";
 const binName = "gsd-core";
 const repoSlug = "Aslanzoghi/gsd-core-kiro";
 const repoUrl = "https://github.com/Aslanzoghi/gsd-core-kiro";
-const changelogRawUrl = "https://raw.githubusercontent.com/Aslanzoghi/gsd-core-kiro/main/CHANGELOG.md";
+const changelogRawUrl = "https://raw.githubusercontent.com/Aslanzoghi/gsd-core-kiro/release/kiro/CHANGELOG.md";
+const changelogUrl = "https://github.com/Aslanzoghi/gsd-core-kiro/blob/release/kiro/CHANGELOG.md";
 const cacheSlug = "aslanzoghi-gsd-core-kiro";
 const updateCacheFileName = "gsd-update-check-aslanzoghi-gsd-core-kiro.json";
 
@@ -29,6 +30,7 @@ module.exports = Object.freeze({
   repoSlug,
   repoUrl,
   changelogRawUrl,
+  changelogUrl,
   cacheSlug,
   updateCacheFileName,
   manualInstallCommand,
