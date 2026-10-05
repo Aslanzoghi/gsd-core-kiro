@@ -1,5 +1,5 @@
 {
-  "name": "@aslanzoghi/gsd-core-kiro",
+  "name": "@aslan_z/gsd-core-kiro",
   "version": "1.16.0",
   "description": "GSD Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "main": ".opencode/plugins/gsd-core.js",

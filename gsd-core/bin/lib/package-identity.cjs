@@ -3,14 +3,14 @@
 //   node scripts/generate-package-identity.cjs
 'use strict';
 
-const packageName = "@aslanzoghi/gsd-core-kiro";
+const packageName = "@aslan_z/gsd-core-kiro";
 const binName = "gsd-core";
 const repoSlug = "Aslanzoghi/gsd-core-kiro";
 const repoUrl = "https://github.com/Aslanzoghi/gsd-core-kiro";
 const changelogRawUrl = "https://raw.githubusercontent.com/Aslanzoghi/gsd-core-kiro/release/kiro/CHANGELOG.md";
 const changelogUrl = "https://github.com/Aslanzoghi/gsd-core-kiro/blob/release/kiro/CHANGELOG.md";
-const cacheSlug = "aslanzoghi-gsd-core-kiro";
-const updateCacheFileName = "gsd-update-check-aslanzoghi-gsd-core-kiro.json";
+const cacheSlug = "aslan-z-gsd-core-kiro";
+const updateCacheFileName = "gsd-update-check-aslan-z-gsd-core-kiro.json";
 
 function formatManualInstall({ packageName, binName, scope, runtime } = {}) {
   const runtimeFlag = runtime ? ` --${runtime}` : '';

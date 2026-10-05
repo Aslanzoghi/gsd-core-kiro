@@ -2362,7 +2362,8 @@ describe('package-identity exports', () => {
   });
 
   test('updateCacheFileName is per-package filename', () => {
-    assert.equal(updateCacheFileName, `gsd-update-check-${REAL_PACKAGE_NAME.replace(/^@/, '').replace('/', '-')}.json`);
+    const slug = REAL_PACKAGE_NAME.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    assert.equal(updateCacheFileName, `gsd-update-check-${slug}.json`);
   });
 });
 

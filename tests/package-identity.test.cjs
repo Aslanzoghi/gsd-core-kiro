@@ -6,7 +6,7 @@ process.env.GSD_TEST_MODE = '1';
 const REAL_PACKAGE_NAME = require('../package.json').name;
 const REAL_REPO_SLUG = require('../package.json').repository.url
   .replace(/^git\+/, '').replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
-const REAL_CACHE_SLUG = REAL_PACKAGE_NAME.replace(/^@/, '').replace('/', '-');
+const REAL_CACHE_SLUG = REAL_PACKAGE_NAME.toLowerCase().replace(/^@/, '').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
 
 // Issue #498: the drift-guard lint. Every GSD package/repo coordinate that
 // appears as a literal anywhere in the runtime/code surface must equal the
