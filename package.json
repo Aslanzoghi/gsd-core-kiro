@@ -1,5 +1,5 @@
 {
-  "name": "@opengsd/gsd-core",
+  "name": "@aslanzoghi/gsd-core-kiro",
   "version": "1.16.0",
   "description": "GSD Core is a meta-prompting, context engineering, and spec-driven development system for AI coding agents.",
   "main": ".opencode/plugins/gsd-core.js",
@@ -52,11 +52,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/open-gsd/gsd-core.git"
+    "url": "git+https://github.com/Aslanzoghi/gsd-core-kiro.git"
   },
-  "homepage": "https://github.com/open-gsd/gsd-core",
+  "homepage": "https://github.com/Aslanzoghi/gsd-core-kiro",
   "bugs": {
-    "url": "https://github.com/open-gsd/gsd-core/issues"
+    "url": "https://github.com/Aslanzoghi/gsd-core-kiro/issues"
   },
   "publishConfig": {
     "access": "public"
