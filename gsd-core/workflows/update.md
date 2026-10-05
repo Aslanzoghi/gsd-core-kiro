@@ -64,10 +64,33 @@ else
   GSD_DIR=""
 fi
 
+# Package coordinates come from THIS install's baked package-identity.cjs
+# (#498), never a literal: a renamed or forked package must update from its
+# own registry name and changelog. The upstream values are only the fallback
+# for an install too old to ship the identity module.
+GSD_IDENTITY=""
+for cand in \
+  "$GSD_DIR/gsd-core/bin/lib/package-identity.cjs" \
+  "$PREFERRED_CONFIG_DIR/gsd-core/bin/lib/package-identity.cjs"; do
+  if [ -f "$cand" ]; then GSD_IDENTITY="$cand"; break; fi
+done
+id_field() {
+  [ -n "$GSD_IDENTITY" ] || return 0
+  node -e "try{const v=require(process.argv[1])[process.argv[2]];process.stdout.write(v==null?'':String(v));}catch{}" "$GSD_IDENTITY" "$1" 2>/dev/null
+}
+GSD_PACKAGE="$(id_field packageName)"; GSD_PACKAGE="${GSD_PACKAGE:-@opengsd/gsd-core}"
+GSD_BIN="$(id_field binName)"; GSD_BIN="${GSD_BIN:-gsd-core}"
+GSD_REPO_URL="$(id_field repoUrl)"; GSD_REPO_URL="${GSD_REPO_URL:-https://github.com/open-gsd/gsd-core}"
+GSD_CHANGELOG_URL="$(id_field changelogRawUrl)"; GSD_CHANGELOG_URL="${GSD_CHANGELOG_URL:-https://raw.githubusercontent.com/open-gsd/gsd-core/main/CHANGELOG.md}"
+
 echo "$INSTALLED_VERSION"
 echo "$INSTALL_SCOPE"
 echo "$TARGET_RUNTIME"
 echo "$GSD_DIR"
+echo "$GSD_PACKAGE"
+echo "$GSD_BIN"
+echo "$GSD_REPO_URL"
+echo "$GSD_CHANGELOG_URL"
 ```
 
 Parse output:
@@ -75,6 +98,7 @@ Parse output:
 - Line 2 = install scope (`LOCAL`, `GLOBAL`, or `UNKNOWN`)
 - Line 3 = target runtime (`claude`, `opencode`, `kilo`, `codex`, `antigravity`, `windsurf`); empty when no installed target is resolved
 - Line 4 = resolved GSD config dir (e.g. `/Users/me/.claude`, `/Users/me/.gemini/antigravity`); empty when no installed target is resolved. Capture this as `GSD_DIR` and pass it to subsequent steps so they don't re-derive the runtime path.
+- Lines 5-8 = this install's package coordinates: `GSD_PACKAGE` (npm package name), `GSD_BIN` (installer bin), `GSD_REPO_URL`, `GSD_CHANGELOG_URL`. Capture all four and use them wherever later steps install, link, or fetch the changelog — never substitute a package name of your own (#2992).
 
 `update-context` reproduces the previous detection cascade — preferred-config-dir fast path, local-over-global with same-path dedup (so `CWD=$HOME` does not misdetect as LOCAL), env-var overrides (`CLAUDE_CONFIG_DIR`, `OPENCODE_CONFIG_DIR`, `KILO_CONFIG`, `XDG_CONFIG_HOME`, `CODEX_HOME`, …), and semver validation — but as a tested projection rather than ~280 lines of inline bash. Branch coverage lives in `tests/update-context.test.cjs`.
 
@@ -87,7 +111,7 @@ UPDATE_TARGET_UNRESOLVED
 
 GSD could not resolve an installed update target. No update was performed.
 
-Rerun from a valid installed runtime: `/gsd:update`. For a fresh installation, run `npx -y --package=@opengsd/gsd-core@latest -- gsd-core --global`.
+Rerun from a valid installed runtime: `/gsd:update`. For a fresh installation, run `npx -y --package={GSD_PACKAGE}@latest -- {GSD_BIN} --global`.
 ```
 
 Exit.
@@ -165,7 +189,7 @@ fi
 ```text
 Couldn't check for updates (reason: {LATEST_REASON}, exit: {LATEST_STATUS}).
 
-To update manually: `npx -y --package=@opengsd/gsd-core@{TAG} -- gsd-core --global`
+To update manually: `npx -y --package={GSD_PACKAGE}@{TAG} -- {GSD_BIN} --global`
 ```
 
 Exit.
@@ -220,8 +244,8 @@ Exit.
 
 ```bash
 CHANGELOG_TMP="/tmp/gsd-changelog-$$.md"
-curl -fsSL "https://raw.githubusercontent.com/open-gsd/gsd-core/main/CHANGELOG.md" -o "$CHANGELOG_TMP" 2>/dev/null \
-  || wget -qO "$CHANGELOG_TMP" "https://raw.githubusercontent.com/open-gsd/gsd-core/main/CHANGELOG.md" 2>/dev/null
+curl -fsSL "$GSD_CHANGELOG_URL" -o "$CHANGELOG_TMP" 2>/dev/null \
+  || wget -qO "$CHANGELOG_TMP" "$GSD_CHANGELOG_URL" 2>/dev/null
 
 GSD_CHANGESET_CLI="$GSD_DIR/scripts/changeset/cli.cjs"
 if [ ! -f "$GSD_CHANGESET_CLI" ]; then
@@ -387,12 +411,12 @@ RUNTIME_FLAG="--$TARGET_RUNTIME"
 
 **If LOCAL install:**
 ```bash
-npx -y --package=@opengsd/gsd-core@"$TAG" -- gsd-core "$RUNTIME_FLAG" --local
+npx -y --package="$GSD_PACKAGE@$TAG" -- "$GSD_BIN" "$RUNTIME_FLAG" --local
 ```
 
 **If GLOBAL install:**
 ```bash
-npx -y --package=@opengsd/gsd-core@"$TAG" -- gsd-core "$RUNTIME_FLAG" --global
+npx -y --package="$GSD_PACKAGE@$TAG" -- "$GSD_BIN" "$RUNTIME_FLAG" --global
 ```
 
 Capture output. If install fails, show error and exit.
@@ -486,7 +510,7 @@ Format completion message (changelog was already shown in confirmation step):
 
 ⚠️  Restart your runtime to pick up the new commands.
 
-[View full changelog](https://github.com/open-gsd/gsd-core/blob/main/CHANGELOG.md)
+[View full changelog]({GSD_REPO_URL}/blob/main/CHANGELOG.md)
 ```
 </step>
 

@@ -24,6 +24,10 @@
 
 'use strict';
 
+// The expected coordinates are whatever package.json names, so a renamed
+// package (a fork published under its own scope) passes without edits.
+const REAL_PACKAGE_NAME = require('../package.json').name;
+
 const { test, describe } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('fs');
@@ -329,8 +333,8 @@ const { checkLatestVersion, CHECK_REASON, PACKAGE_NAME } = require(
 // Tests use a pluggable spawn so no real npm process is invoked.
 
 describe('Bug #2992: deterministic latest-version check', () => {
-  test('PACKAGE_NAME is the constant @opengsd/gsd-core (no callers can override)', () => {
-    assert.equal(PACKAGE_NAME, '@opengsd/gsd-core');
+  test('PACKAGE_NAME is the package.json constant (no callers can override)', () => {
+    assert.equal(PACKAGE_NAME, REAL_PACKAGE_NAME);
   });
 
   test('CHECK_REASON enum exposes the documented codes', () => {
@@ -417,12 +421,12 @@ describe('Issue #815: --next dist-tag support', () => {
   });
 
   test('buildViewArgs() defaults to the bare latest spec (byte-for-byte unchanged)', () => {
-    assert.deepEqual(buildViewArgs(), ['view', '@opengsd/gsd-core', 'version']);
-    assert.deepEqual(buildViewArgs('latest'), ['view', '@opengsd/gsd-core', 'version']);
+    assert.deepEqual(buildViewArgs(), ['view', REAL_PACKAGE_NAME, 'version']);
+    assert.deepEqual(buildViewArgs('latest'), ['view', REAL_PACKAGE_NAME, 'version']);
   });
 
   test('buildViewArgs("next") targets the @next dist-tag', () => {
-    assert.deepEqual(buildViewArgs('next'), ['view', '@opengsd/gsd-core@next', 'version']);
+    assert.deepEqual(buildViewArgs('next'), ['view', `${REAL_PACKAGE_NAME}@next`, 'version']);
   });
 
   test('resolveTag defaults to latest when no --tag flag', () => {
@@ -505,7 +509,7 @@ describe('Issue #815: --next dist-tag support', () => {
  *   3. Structural: worker delegates to check-latest-version's
  *      `checkLatestVersion` rather than calling `npm view` itself.
  *   4. Single-source: check-latest-version's PACKAGE_NAME === the seam's
- *      packageName === the scoped '@opengsd/gsd-core'.
+ *      packageName === the scoped REAL_PACKAGE_NAME.
  *
  * Source-grep policy: this test reads hook source via readFileSync. Since
  * #3545 lint-no-source-grep also covers hooks/, not just bin/lib/gsd-core.
@@ -547,9 +551,9 @@ describe('bug #378 / #498: update worker queries the scoped name via the seam', 
     assert.ok(fs.existsSync(WORKER_PATH), `worker not found at ${WORKER_PATH}`);
   });
 
-  test('package.json name is the scoped @opengsd/gsd-core', () => {
+  test('package.json name is a scoped package name', () => {
     const pkg = JSON.parse(fs.readFileSync(PKG_PATH, 'utf8'));
-    assert.equal(pkg.name, '@opengsd/gsd-core');
+    assert.match(pkg.name, /^@[^/\s]+\/[^/\s]+$/, 'npm view must query a scoped name');
   });
 
   test('worker does NOT hardcode the unscoped gsd-core as a string literal', () => {
@@ -585,7 +589,7 @@ describe('bug #378 / #498: update worker queries the scoped name via the seam', 
 
   test('check-latest-version PACKAGE_NAME is single-sourced from the seam', () => {
     assert.equal(PACKAGE_NAME, SEAM.packageName);
-    assert.equal(SEAM.packageName, '@opengsd/gsd-core');
+    assert.equal(SEAM.packageName, REAL_PACKAGE_NAME);
   });
 });
   });
@@ -761,7 +765,7 @@ describe('buildBannerOutput', () => {
 
   test('returns banner envelope when update_available is true', () => {
     const out = buildBannerOutput({
-      cache: { update_available: true, installed: '1.39.0', latest: '1.40.0', package_name: '@opengsd/gsd-core' },
+      cache: { update_available: true, installed: '1.39.0', latest: '1.40.0', package_name: REAL_PACKAGE_NAME },
       parseError: false,
       suppressFailureWarning: false,
     });
@@ -806,7 +810,7 @@ describe('buildBannerOutput', () => {
 
   test('falls back to "unknown" when installed/latest missing', () => {
     const out = buildBannerOutput({
-      cache: { update_available: true, package_name: '@opengsd/gsd-core' },
+      cache: { update_available: true, package_name: REAL_PACKAGE_NAME },
       parseError: false,
       suppressFailureWarning: false,
     });
@@ -922,7 +926,7 @@ describe('gsd-update-banner.js end-to-end', () => {
         update_available: true,
         installed: '1.39.0',
         latest: '1.40.0',
-        package_name: '@opengsd/gsd-core',
+        package_name: REAL_PACKAGE_NAME,
       });
       const r = runHook(home);
       assert.equal(r.status, 0);
@@ -1040,7 +1044,7 @@ describe('gsd-update-banner.js: #3582 cold tree — degrades to silent, never cr
         update_available: true,
         installed: '1.39.0',
         latest: '1.40.0',
-        package_name: '@opengsd/gsd-core',
+        package_name: REAL_PACKAGE_NAME,
       }),
     );
 

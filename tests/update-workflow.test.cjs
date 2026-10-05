@@ -66,7 +66,7 @@ describe('#4153 regression: unresolved update targets stop before later workflow
     assert.match(step, /INSTALL_SCOPE` is `UNKNOWN`, `TARGET_RUNTIME` is empty, or `GSD_DIR` is empty/);
     assert.match(step, /rerun from a valid installed runtime/i);
     assert.match(step, /Rerun from a valid installed runtime: `\/gsd:update`\./);
-    assert.match(step, /npx -y --package=@opengsd\/gsd-core@latest -- gsd-core --global/);
+    assert.match(step, /npx -y --package=\{GSD_PACKAGE\}@latest -- \{GSD_BIN\} --global/);
     assert.match(step, /target runtime \(`claude`, `opencode`, `kilo`, `codex`, `antigravity`, `windsurf`\)/);
     assert.ok(exit > unresolved, 'unresolved target must exit before the next step');
 
@@ -87,7 +87,7 @@ describe('#4153 regression: unresolved update targets stop before later workflow
     const mutationSpies = [
       { name: 'version check', text: src, needle: 'check-latest-version.cjs', after: end },
       { name: 'custom-file detection', text: src, needle: 'detect-custom-files --config-dir', after: end },
-      { name: 'resolved installer', text: src, needle: 'npx -y --package=@opengsd/gsd-core@"$TAG" -- gsd-core "$RUNTIME_FLAG"', after: end },
+      { name: 'resolved installer', text: src, needle: 'npx -y --package="$GSD_PACKAGE@$TAG" -- "$GSD_BIN" "$RUNTIME_FLAG"', after: end },
       { name: 'update-cache removal', text: src, needle: 'rm -f "$HOME/.cache/gsd/gsd-update-check"', after: end },
       { name: 'restore apply', text: src, needle: 'restore-custom-files --config-dir "$GSD_DIR" --apply', after: end },
       { name: 'patch check', text: src, needle: 'check_local_patches', after: end },
@@ -193,17 +193,26 @@ test('issue #815: version check threads the tag through check-latest-version.cjs
   assert.match(WF, /check-latest-version\.cjs"? --json --tag "\$TAG"/);
 });
 
+test('package coordinates come from the install identity, so a renamed package updates from itself', () => {
+  assert.match(WF, /gsd-core\/bin\/lib\/package-identity\.cjs/);
+  for (const field of ['packageName', 'binName', 'repoUrl', 'changelogRawUrl']) {
+    assert.match(WF, new RegExp(`id_field ${field}\\)`), `update.md must read ${field} from the identity`);
+  }
+  assert.match(WF, /curl -fsSL "\$GSD_CHANGELOG_URL"/, 'changelog must come from the identity, not upstream');
+  assert.match(WF, /\[View full changelog\]\(\{GSD_REPO_URL\}/);
+});
+
 test('issue #815: install uses the selected tag, not a hardcoded @latest', () => {
-  const robust = WF.match(/npx -y --package=@opengsd\/gsd-core@"\$TAG" -- gsd-core/g) || [];
+  const robust = WF.match(/npx -y --package="\$GSD_PACKAGE@\$TAG" -- "\$GSD_BIN"/g) || [];
   const runUpdateStart = WF.indexOf('<step name="run_update">');
   const runUpdateEnd = WF.indexOf('</step>', runUpdateStart);
   assert.ok(runUpdateStart >= 0 && runUpdateEnd > runUpdateStart, 'run_update step must exist');
   const runUpdate = WF.slice(runUpdateStart, runUpdateEnd);
   assert.ok(robust.length >= 2, `expected >=2 tag-parameterized npx invocations, found ${robust.length}`);
-  assert.doesNotMatch(runUpdate, /--package=@opengsd\/gsd-core@latest -- gsd-core/,
-    'install lines must not hardcode @latest once --next exists');
-  assert.doesNotMatch(runUpdate, /--package=@opengsd\/gsd-core@(?:latest|next|beta|canary|rc) -- gsd-core/,
+  assert.doesNotMatch(runUpdate, /--package="?[^\s"]*@(?:latest|next|beta|canary|rc)"? -- /,
     'install lines must use the $TAG variable, never a hardcoded dist-tag literal');
+  assert.doesNotMatch(runUpdate, /@opengsd\/gsd-core/,
+    'install lines must take the package name from the install identity, never a literal');
 });
 
 test('issue #815: command documents --next/--rc and routes it to the update workflow', () => {
@@ -306,7 +315,7 @@ __t3130('bug #3130: update.md contains no bare npx invocations (cache-stale form
   // Any occurrence of `npx -y @opengsd/gsd-core@<something>` without `--package=`
   // is the stale form that triggers the two failure modes.
   // eslint-disable-next-line local/no-unbounded-quantifier -- parses maintainer-authored update.md workflow, bounded prose, not adversarial input
-  const stale = (src3130.match(/npx -y @opengsd\/gsd-core@\S+[^\r\n]*/g) || []);
+  const stale = (src3130.match(/npx -y (?!--package=)\S+@\S+[^\r\n]*/g) || []);
   assert3130.deepEqual(
     stale,
     [],
@@ -318,7 +327,7 @@ __t3130('bug #3130: update.md has exactly two robust resolved-install invocation
   const start = src3130.indexOf('<step name="run_update">');
   const end = src3130.indexOf('</step>', start);
   assert3130.ok(start >= 0 && end > start, 'run_update step must exist');
-  const robust = (src3130.slice(start, end).match(/npx -y --package=@opengsd\/gsd-core@\S+ -- gsd-core/g) || []);
+  const robust = (src3130.slice(start, end).match(/npx -y --package="\$GSD_PACKAGE@\S+ -- "\$GSD_BIN"/g) || []);
   assert3130.strictEqual(
     robust.length,
     2,

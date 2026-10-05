@@ -1,6 +1,10 @@
 'use strict';
 process.env.GSD_TEST_MODE = '1';
 
+// The expected coordinates are whatever package.json names, so a renamed
+// package (a fork published under its own scope) passes without edits.
+const REAL_PACKAGE_NAME = require('../package.json').name;
+
 const { test, describe, afterEach } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -133,7 +137,7 @@ describe('changeset github release notes: tag-range renderer (#3382)', () => {
       fromRef: 'v1.0.0',
       toRef: 'v1.0.1',
       repoSlug: 'example/project',
-      installCommand: 'npx @opengsd/gsd-core@latest',
+      installCommand: `npx ${REAL_PACKAGE_NAME}@latest`,
     });
     assert.equal(fs.readFileSync(output, 'utf8'), generated.body);
   });

@@ -1,6 +1,13 @@
 'use strict';
 process.env.GSD_TEST_MODE = '1';
 
+// The expected coordinates are whatever package.json names, so a renamed
+// package (a fork published under its own scope) passes without edits.
+const REAL_PACKAGE_NAME = require('../package.json').name;
+const REAL_REPO_SLUG = require('../package.json').repository.url
+  .replace(/^git\+/, '').replace(/^https:\/\/github\.com\//, '').replace(/\.git$/, '');
+const REAL_CACHE_SLUG = REAL_PACKAGE_NAME.replace(/^@/, '').replace('/', '-');
+
 // Issue #498: the drift-guard lint. Every GSD package/repo coordinate that
 // appears as a literal anywhere in the runtime/code surface must equal the
 // value the Package Identity seam derives from package.json. This is what
@@ -183,21 +190,21 @@ describe('Issue #498: deriveIdentity (pure, package.json -> coordinates)', () =>
   test('derives the real GSD coordinates from the repo package.json', () => {
     const real = require(path.join(ROOT, 'package.json'));
     const id = deriveIdentity(real);
-    assert.equal(id.packageName, '@opengsd/gsd-core');
+    assert.equal(id.packageName, REAL_PACKAGE_NAME);
     assert.equal(id.binName, 'gsd-core');
-    assert.equal(id.repoSlug, 'open-gsd/gsd-core');
+    assert.equal(id.repoSlug, REAL_REPO_SLUG);
   });
 
-  test('deriveIdentity returns cacheSlug for @opengsd/gsd-core', () => {
+  test('deriveIdentity returns cacheSlug for the real package', () => {
     const real = require(path.join(ROOT, 'package.json'));
     const id = deriveIdentity(real);
-    assert.equal(id.cacheSlug, 'opengsd-gsd-core');
+    assert.equal(id.cacheSlug, REAL_CACHE_SLUG);
   });
 
-  test('deriveIdentity returns updateCacheFileName for @opengsd/gsd-core', () => {
+  test('deriveIdentity returns updateCacheFileName for the real package', () => {
     const real = require(path.join(ROOT, 'package.json'));
     const id = deriveIdentity(real);
-    assert.equal(id.updateCacheFileName, 'gsd-update-check-opengsd-gsd-core.json');
+    assert.equal(id.updateCacheFileName, `gsd-update-check-${REAL_CACHE_SLUG}.json`);
   });
 });
 
@@ -230,7 +237,7 @@ describe('Issue #498: formatManualInstall (the npx fallback command)', () => {
     const id = deriveIdentity(require(path.join(ROOT, 'package.json')));
     assert.equal(
       formatManualInstall({ packageName: id.packageName, binName: id.binName, scope: 'global', runtime: 'claude' }),
-      'npx -y --package=@opengsd/gsd-core@latest -- gsd-core --claude --global',
+      `npx -y --package=${REAL_PACKAGE_NAME}@latest -- gsd-core --claude --global`,
     );
   });
 });
@@ -243,26 +250,26 @@ describe('Issue #498: generated runtime module (baked)', () => {
 
   test('requiring the generated module exposes the real coordinates', () => {
     const id = require(GENERATED);
-    assert.equal(id.packageName, '@opengsd/gsd-core');
+    assert.equal(id.packageName, REAL_PACKAGE_NAME);
     assert.equal(id.binName, 'gsd-core');
-    assert.equal(id.repoSlug, 'open-gsd/gsd-core');
+    assert.equal(id.repoSlug, REAL_REPO_SLUG);
   });
 
-  test('generated module exports cacheSlug matching @opengsd/gsd-core', () => {
+  test('generated module exports cacheSlug matching the real package', () => {
     const id = require(GENERATED);
-    assert.equal(id.cacheSlug, 'opengsd-gsd-core');
+    assert.equal(id.cacheSlug, REAL_CACHE_SLUG);
   });
 
-  test('generated module exports updateCacheFileName matching @opengsd/gsd-core', () => {
+  test('generated module exports updateCacheFileName matching the real package', () => {
     const id = require(GENERATED);
-    assert.equal(id.updateCacheFileName, 'gsd-update-check-opengsd-gsd-core.json');
+    assert.equal(id.updateCacheFileName, `gsd-update-check-${REAL_CACHE_SLUG}.json`);
   });
 
   test('generated manualInstallCommand closes over the baked coordinates', () => {
     const id = require(GENERATED);
     assert.equal(
       id.manualInstallCommand({ scope: 'global', runtime: 'claude' }),
-      'npx -y --package=@opengsd/gsd-core@latest -- gsd-core --claude --global',
+      `npx -y --package=${REAL_PACKAGE_NAME}@latest -- gsd-core --claude --global`,
     );
   });
 });
