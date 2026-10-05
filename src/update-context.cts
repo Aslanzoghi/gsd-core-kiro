@@ -31,6 +31,7 @@ export const RUNTIME_DIRS: RuntimeDirEntry[] = [
   ['kilo', '.config/kilo'],
   ['kilo', '.kilo'],
   ['codex', '.codex'],
+  ['kiro', '.kiro'],
 ];
 
 const SEMVER_PREFIX = /^\d+\.\d+\.\d+/;
@@ -99,6 +100,7 @@ export function inferPreferredRuntime({ fs, env, preferredConfigDir }: InferPref
   if (env['KILO_CONFIG_DIR'] || env['KILO_CONFIG']) return 'kilo';
   if (env['OPENCODE_CONFIG_DIR'] || env['OPENCODE_CONFIG']) return 'opencode';
   if (env['CLAUDE_CONFIG_DIR']) return 'claude';
+  if (env['KIRO_HOME']) return 'kiro';
   return '';
 }
 
@@ -120,6 +122,7 @@ export function envRuntimeDirs({ env, home }: EnvRuntimeDirsOpts): RuntimeDirEnt
   else if (env['OPENCODE_CONFIG']) out.push(['opencode', path.dirname(ex(env['OPENCODE_CONFIG']))]);
   else if (env['XDG_CONFIG_HOME']) out.push(['opencode', path.join(ex(env['XDG_CONFIG_HOME']), 'opencode')]);
   if (env['CODEX_HOME']) out.push(['codex', ex(env['CODEX_HOME'])]);
+  if (env['KIRO_HOME']) out.push(['kiro', ex(env['KIRO_HOME'])]);
   return out;
 }
 

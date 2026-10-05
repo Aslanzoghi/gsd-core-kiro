@@ -99,6 +99,25 @@ describe('resolveUpdateContext: scope cascade', () => {
     assert.equal(r.runtime, 'codex');
   });
 
+  test('GLOBAL kiro install under $HOME/.kiro resolves the kiro runtime without a hint', () => {
+    const fs = fakeFs({ [ver(`${HOME}/.kiro`)]: '1.16.0\n', [marker(`${HOME}/.kiro`)]: 'x' });
+    const r = resolveUpdateContext({ home: HOME, cwd: CWD, env: {}, fs });
+    assert.equal(r.scope, 'GLOBAL');
+    assert.equal(r.runtime, 'kiro');
+    assert.ok(sameDir(r.gsdDir, `${HOME}/.kiro`), `gsdDir was ${r.gsdDir}`);
+  });
+
+  test('KIRO_HOME override is probed and infers the kiro runtime', () => {
+    const kiroHome = '/opt/kiro-home';
+    const fs = fakeFs({ [ver(kiroHome)]: '1.16.0\n', [marker(kiroHome)]: 'x' });
+    const env = { KIRO_HOME: kiroHome };
+    assert.equal(inferPreferredRuntime({ fs, env, preferredConfigDir: '' }), 'kiro');
+    const r = resolveUpdateContext({ home: HOME, cwd: CWD, env, fs });
+    assert.equal(r.scope, 'GLOBAL');
+    assert.equal(r.runtime, 'kiro');
+    assert.ok(sameDir(r.gsdDir, kiroHome), `gsdDir was ${r.gsdDir}`);
+  });
+
   test('no install anywhere -> UNKNOWN / empty runtime / empty gsdDir', () => {
     const r = resolveUpdateContext({ home: HOME, cwd: CWD, env: {}, fs: fakeFs({}) });
     assert.deepEqual(r, { installedVersion: '0.0.0', scope: 'UNKNOWN', runtime: '', gsdDir: '' });
