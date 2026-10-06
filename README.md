@@ -19,6 +19,26 @@
 
 ---
 
+## About this fork
+
+This is a fork of [open-gsd/gsd-core](https://github.com/open-gsd/gsd-core) that adds [Kiro](https://kiro.dev) (IDE and `kiro-cli`) as a supported runtime. It is published to npm as `@aslan_z/gsd-core-kiro`, and its releases come from the `release/kiro` branch.
+
+Differences from upstream:
+
+- **`--kiro` installer flag.** Skills go to `.kiro/skills/gsd-<name>/SKILL.md` and custom agents to `.kiro/agents/gsd-<name>.md`, with GSD's tool grants mapped to Kiro tool tags. Global installs use `~/.kiro/` (or `$KIRO_HOME` / `$KIRO_CONFIG_DIR`). No settings file or hooks are written for Kiro.
+- **Kiro-aware workflows.** The workflow launcher looks for `gsd-tools` in the Kiro home. Project instructions that the workflows call `CLAUDE.md` live in `.kiro/steering/` instead.
+- **`/gsd-update` follows the fork.** It detects Kiro installs and reads the package name, repository and changelog branch from the installed package's identity, so updates and changelogs come from this fork, not upstream.
+- **Side-by-side with other runtimes.** A Kiro install can sit next to a Claude Code install in the same project. Both use the same `.planning/` state, so you can switch runtimes partway through a project.
+
+```bash
+npx @aslan_z/gsd-core-kiro@latest --kiro --local    # this project's .kiro/
+npx @aslan_z/gsd-core-kiro@latest --kiro --global   # ~/.kiro/ (or $KIRO_HOME)
+```
+
+Everything else follows upstream. For Kiro-specific details, see the [Kiro section](docs/how-to/install-on-your-runtime.md#kiro) of the install guide and the [host-integration capability matrix](docs/reference/host-integration-capability-matrix.md#kiro). Report fork issues at [Aslanzoghi/gsd-core-kiro](https://github.com/Aslanzoghi/gsd-core-kiro/issues).
+
+---
+
 ## What is GSD Core
 
 GSD Core is a context-engineering and spec-driven development framework that drives AI coding agents (Claude Code, Codex, Antigravity CLI, Kimi CLI, Copilot, Cursor, and more) through a disciplined phase loop. It solves [context rot](docs/explanation/context-engineering.md) — the quality degradation that accumulates as an AI fills its context window — by running all heavy research, planning, and execution work in fresh-context subagents while keeping your main session lean.
