@@ -3314,7 +3314,20 @@ function retargetInstalledIncludes(
   if (typeof home === 'string' && home.length > 0 && pathPrefix !== `$HOME/${home}/`) {
     result = result
       .split(`@~/${home}/`).join(`@${pathPrefix}`)
-      .split(`@$HOME/${home}/`).join(`@${pathPrefix}`);
+      .split(`@$HOME/${home}/`).join(`@${pathPrefix}`)
+      // Bare prose paths ("Read `~/.claude/gsd-core/references/x.md`") name the
+      // same payload without the `@` include marker and miss it just as badly.
+      .split(`~/${home}/gsd-core/`).join(`${pathPrefix}gsd-core/`)
+      .split(`$HOME/${home}/gsd-core/`).join(`${pathPrefix}gsd-core/`)
+      // `/gsd-surface` keeps its state at the runtime's config root and stages
+      // skills beneath it, so its prose names that root.
+      .split(`~/${home}/.gsd-surface.json`).join(`${pathPrefix}.gsd-surface.json`)
+      .split(`$HOME/${home}/.gsd-surface.json`).join(`${pathPrefix}.gsd-surface.json`)
+      .split(`~/${home}/.gsd-profile`).join(`${pathPrefix}.gsd-profile`)
+      .split(`~/${home}/skills`).join(`${pathPrefix}skills`)
+      // A lone backticked home ("receive `~/.claude` as `configDir`") — but not
+      // an example list of several runtimes' homes ("`~/.claude`, `~/.hermes`").
+      .replace(new RegExp(`\`~/${home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\`(?!, )`, 'g'), () => `\`${pathPrefix.replace(/\/$/, '')}\``);
   }
   return result;
 }

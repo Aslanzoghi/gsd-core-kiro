@@ -160,4 +160,23 @@ describe('Kiro install', () => {
     assert.ok(fs.existsSync(path.join(kiroHome, 'skills', 'gsd-plan-phase', 'SKILL.md')), 'skills land under KIRO_HOME');
     assert.ok(!fs.existsSync(path.join(home, '.kiro', 'skills')), 'the default ~/.kiro is not written');
   });
+
+  test('a global install retargets the payload\'s ~/.claude paths and does not warn about leaks', (t) => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kiro-leak-'));
+    t.after(() => cleanup(home));
+    const result = runInstaller(home, ['--kiro', '--global']);
+    assertExit0(result, 'kiro global install');
+    assert.ok(!/unreplaced \.claude path/.test(result.stdout + result.stderr), 'no leaked-path warning');
+    const agent = fs.readFileSync(path.join(home, '.kiro', 'gsd-core', 'agents', 'gsd-ai-researcher.md'), 'utf8');
+    assert.ok(!/(?:~|\$HOME)\/\.claude\/gsd-core\//.test(agent), 'agent include and prose paths no longer name ~/.claude');
+    assert.ok(/\.kiro\/gsd-core\/references\/ai-frameworks\.md/.test(agent), 'they point at the Kiro install instead');
+  });
+
+  test('a local install does not warn about leaked paths either', (t) => {
+    const project = fs.mkdtempSync(path.join(os.tmpdir(), 'gsd-kiro-leak-local-'));
+    t.after(() => cleanup(project));
+    const result = runInstaller(project, ['--kiro', '--local']);
+    assertExit0(result, 'kiro local install');
+    assert.ok(!/unreplaced \.claude path/.test(result.stdout + result.stderr), 'no leaked-path warning');
+  });
 });

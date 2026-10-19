@@ -12616,7 +12616,16 @@ function install(isGlobal, runtime = DEFAULT_RUNTIME, options = {}) {
           }
           throw err;
         }
-        const matches = content.match(/(?:~|\$HOME)\/\.claude\b/g);
+        // The launcher preamble deliberately lists `${CLAUDE_CONFIG_DIR:-$HOME/.claude}`
+        // as one candidate home among every runtime's, and the executor prompt
+        // names Claude Code's own user-scoped `~/.claude/mcp.json` on purpose,
+        // and graphify's docs list every runtime's home as an example; none of
+        // these is a GSD payload path that failed to retarget.
+        const matches = content
+          .replace(/\$\{CLAUDE_CONFIG_DIR:-\$HOME\/\.claude\}/g, '')
+          .replace(/~\/\.claude\/mcp\.json/g, '')
+          .replace(/`~\/\.claude`, `~\/\.hermes`/g, '')
+          .match(/(?:~|\$HOME)\/\.claude\b/g);
         if (matches) {
           leakedPaths.push({ file: relPath, count: matches.length });
         }
