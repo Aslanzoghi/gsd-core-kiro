@@ -1902,6 +1902,10 @@ const REVIEWER_EFFORT_LEVELS = new Set(['minimal', 'low', 'medium', 'high', 'xhi
  * silently rot away from reality (DEFECT.GENERATIVE-FIX).
  */
 const KNOWN_HOST_BEHAVIORS = new Set([
+  // #2586: declares runtime-level feature axes GSD does not/cannot support on
+  // omitting the key on every other runtime carries no inverted meaning.
+  // this host (e.g. Codex's `["context-warnings","phase-lifecycle-display"]`)
+  // — present-and-populated / absent-is-unsupported-empty convention, so
   'agentFileExtension',
   'agentFrontmatterExtensions',
   'agentManifestStyle',
@@ -1919,6 +1923,7 @@ const KNOWN_HOST_BEHAVIORS = new Set([
   'combinedFamilyInstall',
   'commandBodyConverter',
   'contentRewriteProfile',
+  'defaultHomeIncludeRoot',
   'doneBannerStyle',
   'flatCommandDir',
   'frontmatterDialect',
@@ -1939,6 +1944,7 @@ const KNOWN_HOST_BEHAVIORS = new Set([
   'managedHookEvents',
   'mcpCompanion',
   'namedSubagentsSupported',
+  'nativeCliPlugin',
   'nativeModelAliases',
   'nativePlugin',
   'noPathRewrite',
@@ -1955,6 +1961,7 @@ const KNOWN_HOST_BEHAVIORS = new Set([
   'requiresSubagentPair',
   'restoreAtRefTildeInAgents',
   'restoreAtRefTildeInSpecTree',
+  'retargetsGsdCoreProsePath',
   'retiredArtifacts',
   'rewriteClaudeAtIncludes',
   'settingsFileByScope',
@@ -1974,10 +1981,6 @@ const KNOWN_HOST_BEHAVIORS = new Set([
   'specRootSkillPass',
   'tomlConfigInstall',
   'trackCategoryDescription',
-  // #2586: declares runtime-level feature axes GSD does not/cannot support on
-  // this host (e.g. Codex's `["context-warnings","phase-lifecycle-display"]`)
-  // — present-and-populated / absent-is-unsupported-empty convention, so
-  // omitting the key on every other runtime carries no inverted meaning.
   'unsupportedFeatures',
   'verificationStyle',
   'writeCategoryDescription',
@@ -2575,7 +2578,7 @@ function validateLaneProbe(ctx, probe) {
     if (!isPositiveIntegerMs(probe.timeoutMs)) {
       errors.push(
         ctx + ' reviewer.probe.timeoutMs must be a positive integer of milliseconds for kind "' +
-        probe.kind + '" — an unbounded probe hangs every /gsd:review invocation ' +
+        probe.kind + '" — an unbounded probe hangs every /gsd-review invocation ' +
         '(got: ' + describeValue(probe.timeoutMs) + ')',
       );
     }

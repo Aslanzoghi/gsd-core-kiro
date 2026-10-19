@@ -11,10 +11,13 @@ import path from 'node:path';
 import { escapeRegex } from './pattern.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import ioMod = require('./io.cjs');
-const { output, error, declineNoOp, formatDiagnosticToken } = ioMod;
+const { output, error, declineNoOp, formatDiagnosticToken, ERROR_REASON } = ioMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import cliExitModule = require('./cli-exit.cjs');
 const { ExitError } = cliExitModule;
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+import capabilityLedgerMod = require('./capability-ledger.cjs');
+const { readSmallRegularFile } = capabilityLedgerMod;
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import stateContract = require('./state-contract.cjs');
 const { publishStateContract } = stateContract;
@@ -40,7 +43,7 @@ const {
 import roadmapParserMod = require('./roadmap-parser.cjs');
 // #3642: hasMilestoneSectioning no longer consumed here — its >=2 semantics answered sibling conflation, but this branch asks asserted-vs-section (>=1). It stays exported from roadmap-parser.cjs for its unit pins.
 const { getMilestoneInfo, extractCurrentMilestone, isMilestoneBoundedInRoadmap, hasAnyMilestoneSection, classifyMilestoneScalar } = roadmapParserMod;
-import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, toPosixPath, execGit } from './shell-command-projection.cjs';
+import { platformWriteSync, platformReadSync, platformEnsureDir, retryRenameSync, toPosixPath, execGit, normalizeContent } from './shell-command-projection.cjs';
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 import planningWorkspace = require('./planning-workspace.cjs');
 const { planningDir, planningPaths, resolvePhaseIdConvention } = planningWorkspace;
@@ -133,7 +136,7 @@ import {
   stateReplaceFieldIfTemplate,
   stateCurrentPositionSlice,
 } from './state-document.cjs';
-import { tokenizeHeadings, collectSection, replaceSection, stripFencedCode } from './markdown-sectionizer.cjs';
+import { tokenizeHeadings, collectSection, collectSections, replaceSection, stripFencedCode } from './markdown-sectionizer.cjs';
 import type { HeadingToken } from './markdown-sectionizer.cjs';
 import { parseMarkdownTable, updateTableCell, deleteTableRow, insertTableRow, splitTableRow, isDelimiterRow } from './markdown-table.cjs';
 import { textEncodingError } from './validate.cjs';
@@ -615,19 +618,52 @@ function cmdStateGet(cwd: string, section: string | undefined, raw: boolean): vo
   }
 }
 
-function readTextArgOrFile(cwd: string, value: string | undefined, filePath: string | undefined, label: string): string | undefined {
+/**
+ * #4926: cap on a `--<flag>-file` text input. Twice the 128 KiB one argv string
+ * can carry on Linux, so the file form never takes less than the inline form,
+ * and the entry echoed back on stdout stays small.
+ */
+const TEXT_FILE_MAX_BYTES = 256 * 1024;
+
+/**
+ * Resolve a text argument that may instead be supplied as a file (`--<flag>`
+ * or `--<flag>-file`).
+ *
+ * #4926: the file is a read-once INPUT — its contents are copied into
+ * STATE.md and the path itself is never written, recorded, or resolved
+ * again — so it is not a project-write resource and is not confined to the
+ * project root. A scratch file from an agent's temp directory is accepted.
+ * A relative path still resolves against the project root.
+ *
+ * A file that cannot be read is a caller error and goes through the fault
+ * path — stderr, non-zero exit (USAGE), `--json-errors` envelope — rather than
+ * an `{ added: false }` payload at exit 0 that a shell caller gating on `$?`
+ * reads as success while nothing was written.
+ *
+ * An unconfined path is hostile input, so the read goes through
+ * `readSmallRegularFile`: a FIFO, a device (`/dev/zero`, a piped `/dev/stdin`)
+ * or a directory is refused without blocking, and a file over
+ * TEXT_FILE_MAX_BYTES is refused without being read.
+ */
+function readTextArgOrFile(cwd: string, value: string | undefined, filePath: string | undefined, flag: string): string | undefined {
   if (!filePath) return value;
 
-  // Path traversal guard: ensure file resolves within project directory
-  // eslint-disable-next-line @typescript-eslint/no-require-imports, @typescript-eslint/unbound-method
-  const { assertWithinRoot, PathAcceptance } = require('./security.cjs') as { assertWithinRoot(filePath: unknown, baseDir: unknown, label?: string | null, policy?: 'relative-only' | 'absolute-inside-root'): string; PathAcceptance: { RelativeOnly: 'relative-only'; AbsoluteInsideRoot: 'absolute-inside-root' } };
-  const contained = assertWithinRoot(filePath, cwd, `${label} path`, PathAcceptance.AbsoluteInsideRoot);
+  const refuse = (why: string | undefined): never => error(
+    `--${flag}-file could not be read: ${formatDiagnosticToken(filePath)}${why ? ` (${why})` : ''}`,
+    ERROR_REASON.USAGE,
+  );
 
+  let content: string | null;
   try {
-    return fs.readFileSync(contained, 'utf-8').trimEnd();
-  } catch {
-    throw new Error(`${label} file not found: ${filePath}`);
+    content = readSmallRegularFile(path.resolve(cwd, filePath), TEXT_FILE_MAX_BYTES);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EFBIG') return refuse(`larger than ${TEXT_FILE_MAX_BYTES} bytes`);
+    if (code === 'EISDIR' || code === 'ENXIO') return refuse('not a regular file');
+    return refuse(code);
   }
+  if (content === null) return refuse('ENOENT');
+  return content.trimEnd();
 }
 
 function cmdStatePatch(cwd: string, patches: Record<string, string>, raw: boolean): void {
@@ -1581,21 +1617,19 @@ function cmdStateUpdateProgress(cwd: string, raw: boolean): void {
 
 function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  // #4926: every refusal from this verb goes through the fault path (non-zero
+  // exit), so a caller gating on `$?` never reads success while nothing was written.
+  if (!fs.existsSync(statePath)) return error('STATE.md not found', ERROR_REASON.USAGE);
 
   const { phase, summary, summary_file, rationale, rationale_file } = options;
-  let summaryText: string | undefined = undefined;
-  let rationaleText = '';
+  const summaryText = readTextArgOrFile(cwd, summary, summary_file, 'summary');
+  // The rationale is optional: blank, inline or file, means "no rationale".
+  const rationaleInput = readTextArgOrFile(cwd, rationale || '', rationale_file, 'rationale') || '';
+  const rationaleText = rationaleInput.trim() ? rationaleInput : '';
 
-  try {
-    summaryText = readTextArgOrFile(cwd, summary, summary_file, 'summary');
-    rationaleText = readTextArgOrFile(cwd, rationale || '', rationale_file, 'rationale') || '';
-  } catch (err) {
-    output({ added: false, reason: (err as Error).message }, raw, 'false');
-    return;
-  }
-
-  if (!summaryText) { output({ error: 'summary required' }, raw, undefined); return; }
+  // A blank inline value is refused the same as a blank file (the file form is
+  // trimEnd()ed by readTextArgOrFile, the inline form is not).
+  if (!summaryText || !summaryText.trim()) return error('summary required — pass a non-blank --summary or --summary-file', ERROR_REASON.USAGE);
 
   // #3231/#3481: `--phase` omitted → resolve from the STATE.md being written, via
   // the canonical ladder `state prune` uses. A decision entry is a permanent
@@ -1666,18 +1700,13 @@ function cmdStateAddDecision(cwd: string, options: StateAddDecisionOptions, raw:
 
 function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  // #4926: every refusal from this verb goes through the fault path (non-zero
+  // exit), so a caller gating on `$?` never reads success while nothing was written.
+  if (!fs.existsSync(statePath)) return error('STATE.md not found', ERROR_REASON.USAGE);
   const blockerOptions: StateAddBlockerOptions = typeof text === 'object' && text !== null ? text : { text: text };
-  let blockerText: string | undefined = undefined;
+  const blockerText = readTextArgOrFile(cwd, blockerOptions.text, blockerOptions.text_file, 'text');
 
-  try {
-    blockerText = readTextArgOrFile(cwd, blockerOptions.text, blockerOptions.text_file, 'blocker');
-  } catch (err) {
-    output({ added: false, reason: (err as Error).message }, raw, 'false');
-    return;
-  }
-
-  if (!blockerText) { output({ error: 'text required' }, raw, undefined); return; }
+  if (!blockerText || !blockerText.trim()) return error('text required — pass a non-blank --text or --text-file', ERROR_REASON.USAGE);
 
   const entry = `- ${blockerText}`;
   let _added = false;
@@ -1732,19 +1761,15 @@ function cmdStateAddBlocker(cwd: string, text: string | StateAddBlockerOptions, 
 
 function cmdStateAddRoadmapEvolution(cwd: string, options: StateAddRoadmapEvolutionOptions, raw: boolean): void {
   const statePath = planningPaths(cwd).state;
-  if (!fs.existsSync(statePath)) { output({ error: 'STATE.md not found' }, raw, undefined); return; }
+  // #4926: every refusal from this verb goes through the fault path (non-zero
+  // exit), so a caller gating on `$?` never reads success while nothing was written.
+  if (!fs.existsSync(statePath)) return error('STATE.md not found', ERROR_REASON.USAGE);
 
   const { phase, action, after, note, note_file, urgent } = options;
-  let noteText: string | undefined = undefined;
-  try {
-    noteText = readTextArgOrFile(cwd, note, note_file, 'note');
-  } catch (err) {
-    output({ added: false, reason: (err as Error).message }, raw, 'false');
-    return;
-  }
+  const noteText = readTextArgOrFile(cwd, note, note_file, 'note');
   // Reject missing / empty / whitespace-only notes — an evolution entry with no
   // narrative is meaningless and would corrupt the section with a dangling bullet.
-  if (!noteText || !noteText.trim()) { output({ error: 'note required' }, raw, undefined); return; }
+  if (!noteText || !noteText.trim()) return error('note required — pass a non-blank --note or --note-file', ERROR_REASON.USAGE);
   // Flatten line breaks so the entry is always a single Markdown bullet. The
   // dedupe + rendering contract is line-oriented; a multiline --note-file would
   // otherwise spill continuation lines outside the bullet and defeat dedupe.
@@ -4972,11 +4997,112 @@ function computeChangedFrontmatterFields(
  *   (#3818's own direction), which is why keeping it as the candidate
  *   source was rejected (design doc, Rejected #1).
  */
+/**
+ * ADR-4629 §8.2 (epic #4629, C2): the value a reported/asserted target
+ * resolves to in one document side. Lifted verbatim out of
+ * `reconcileReportedFields` (it was the private `valueOf` closure) so the C2
+ * verifying executor reads a target through the SAME resolution chain the
+ * measured-delta reporter uses — ADR-4629 Decision 4: extend the reporter,
+ * never build a second one.
+ *
+ * #3471 review (unchanged): body-FIRST, frontmatter-key-FLAT-fallback,
+ * dotted-PATH-fallback last. Body-first mirrors the actual write precedence
+ * `patchCore`/`updateCore` apply (#1162's fix — a lowercase body label that
+ * happens to case-exact-match a frontmatter key must still resolve against
+ * the body). `field` a literal flat key (even one containing a `.`) is tried
+ * before it is split and walked as a dotted path (test matrix row 26) —
+ * `resolveFrontmatterPath` pins that same order for the frontmatter side.
+ *
+ * `Current Position` is special-cased: it names the WHOLE `## Current
+ * Position` section, not a single `Label: value` line, so `stateExtractField`
+ * can never resolve it (the root cause of the "Current Position undercount" —
+ * a transform could correctly push `'Current Position'` into its own
+ * `updated` list and it was still silently dropped, because both sides
+ * resolved to `null` and `null === null` failed the old `intended !== null`
+ * guard). `sliceCurrentPositionSection` is the existing fence-aware section
+ * locator (state-transition.cts) — reused rather than re-derived.
+ *
+ * C2 generalizes that special case: a name in `sectionTargets` (a declared
+ * `target: 'section'` assertion) resolves to its whole section body through
+ * the markdown-sectionizer seam (ADR-1372), never a hand-rolled regex.
+ * Existing callers pass no `sectionTargets` and resolve exactly as before.
+ */
+function readStateTarget(
+  fm: Record<string, unknown>,
+  body: string,
+  field: string,
+  sectionTargets: ReadonlySet<string>,
+): string | null {
+  if (field === 'Current Position') {
+    const section = stateTransitionMod.sliceCurrentPositionSection(body);
+    return section !== null ? section.trim() : null;
+  }
+  if (sectionTargets.has(field)) {
+    const section = collectSection(body, (h: HeadingToken) => h.text === field);
+    return section !== null ? section.body.trim() : null;
+  }
+  const bodyValue = stateExtractField(body, field);
+  if (bodyValue !== null) return bodyValue;
+  if (Object.prototype.hasOwnProperty.call(fm, field)) return String(fm[field]);
+  if (field.includes('.')) {
+    const resolved = resolveFrontmatterPath(fm, field);
+    if (resolved !== STATE_FIELD_ABSENT) {
+      return stateScalarString(resolved);
+    }
+  }
+  return null;
+}
+
+const NO_SECTION_TARGETS: ReadonlySet<string> = new Set<string>();
+
+/**
+ * ADR-4629 §8.2 (C2): did this target measurably change between the two
+ * document sides? Lifted verbatim out of `reconcileReportedFields` (the private
+ * `changed` closure) for the same one-rule reason as `readStateTarget`.
+ *
+ * A target can itself be a declared derived leaf (e.g. `plannedPhaseCore`
+ * pushing `'progress.total_plans'` — state-transition.cts). `readStateTarget`'s
+ * null-vs-string convention cannot tell "absent from the frontmatter" apart
+ * from "resolved to the literal string 'null'/''", so it cannot carry the same
+ * materialization rule `computeChangedFrontmatterFields` applies. Those targets
+ * route through the SAME primitives (`resolveFrontmatterPath` + the
+ * `STATE_FIELD_ABSENT` sentinel + `stateFieldValuesDiffer`) instead of a
+ * second, parallel absence convention — one rule, reused, not duplicated.
+ */
+function stateTargetChanged(
+  snapshotFm: Record<string, unknown>,
+  snapshotBody: string,
+  persistedFm: Record<string, unknown>,
+  persistedBody: string,
+  field: string,
+  sectionTargets: ReadonlySet<string>,
+): boolean {
+  const isDeclaredDerivedLeaf = field.includes('.') && Object.prototype.hasOwnProperty.call(FIELD_CLASSIFICATION, field);
+  if (isDeclaredDerivedLeaf && !sectionTargets.has(field)) {
+    const before = resolveFrontmatterPath(snapshotFm, field);
+    const after = resolveFrontmatterPath(persistedFm, field);
+    // Same generalized provenance rule as computeChangedFrontmatterFields:
+    // absent-in-snapshot-materializing-in-persisted is the disk scan
+    // catching a never-synced document up, not this write's own action.
+    if (before === STATE_FIELD_ABSENT && after !== STATE_FIELD_ABSENT) return false;
+    return stateFieldValuesDiffer(before, after);
+  }
+  const before = readStateTarget(snapshotFm, snapshotBody, field, sectionTargets);
+  const after = readStateTarget(persistedFm, persistedBody, field, sectionTargets);
+  if (before === null && after === null) return false;
+  if (before === null || after === null) return true;
+  return before.trim() !== after.trim();
+}
+
 function reconcileReportedFields(
   statePath: string,
   preWriteState: StatePreWriteSnapshot,
   reported: string[],
   divergedFields: string[],
+  // ADR-4629 §8.2 / Decision 4 (C2): names in `reported` that are declared
+  // `target: 'section'` assertions, measured as whole-section deltas. Omitted
+  // by every pre-C2 caller, whose output is unchanged.
+  sectionTargets: ReadonlySet<string> = NO_SECTION_TARGETS,
 ): string[] {
   void divergedFields; // ADR-3473 §8.7 D18: out-param only, not a candidate source here.
   if (preWriteState.fm === undefined || preWriteState.body === undefined) return [];
@@ -4987,69 +5113,8 @@ function reconcileReportedFields(
   const snapshotFm = preWriteState.fm;
   const snapshotBody = preWriteState.body;
 
-  // #3471 review (unchanged by this rewrite): body-FIRST, frontmatter-key-
-  // FLAT-fallback, dotted-PATH-fallback last. Body-first mirrors the actual
-  // write precedence `patchCore`/`updateCore` apply (#1162's fix — a
-  // lowercase body label that happens to case-exact-match a frontmatter key
-  // must still resolve against the body). `field` a literal flat key (even
-  // one containing a `.`) is tried before it is split and walked as a
-  // dotted path (test matrix row 26) — `resolveFrontmatterPath` pins that
-  // same order for the frontmatter side alone.
-  //
-  // `Current Position` is special-cased: it names the WHOLE `## Current
-  // Position` section, not a single `Label: value` line, so
-  // `stateExtractField` can never resolve it (this is the root cause of the
-  // "Current Position undercount" — a transform can correctly push
-  // `'Current Position'` into its own `updated` list, and this function
-  // still silently dropped it, because `valueOf` returned `null` for BOTH
-  // sides and `null === null` failed the old `intended !== null` guard).
-  // `sliceCurrentPositionSection` is the existing fence-aware section
-  // locator (state-transition.cts) — reused rather than re-derived.
-  const valueOf = (fm: Record<string, unknown>, body: string, field: string): string | null => {
-    if (field === 'Current Position') {
-      const section = stateTransitionMod.sliceCurrentPositionSection(body);
-      return section !== null ? section.trim() : null;
-    }
-    const bodyValue = stateExtractField(body, field);
-    if (bodyValue !== null) return bodyValue;
-    if (Object.prototype.hasOwnProperty.call(fm, field)) return String(fm[field]);
-    if (field.includes('.')) {
-      const resolved = resolveFrontmatterPath(fm, field);
-      if (resolved !== STATE_FIELD_ABSENT) {
-        return stateScalarString(resolved);
-      }
-    }
-    return null;
-  };
-
-  // A field in `reported` can itself be a declared derived leaf (e.g.
-  // `plannedPhaseCore` pushing `'progress.total_plans'` — state-
-  // transition.cts:1752). `valueOf`'s null-vs-string convention cannot tell
-  // "absent from the frontmatter" apart from "resolved to the literal string
-  // 'null'/''", so it cannot carry the same materialization rule
-  // `computeChangedFrontmatterFields` applies below. Route these fields
-  // through the SAME primitives (`resolveFrontmatterPath` + the
-  // `STATE_FIELD_ABSENT` sentinel + `stateFieldValuesDiffer`) instead of a
-  // second, parallel absence convention — one rule, reused, not duplicated.
-  const isDeclaredDerivedLeaf = (candidate: string): boolean =>
-    candidate.includes('.') && Object.prototype.hasOwnProperty.call(FIELD_CLASSIFICATION, candidate);
-
-  const changed = (field: string): boolean => {
-    if (isDeclaredDerivedLeaf(field)) {
-      const before = resolveFrontmatterPath(snapshotFm, field);
-      const after = resolveFrontmatterPath(persistedFm, field);
-      // Same generalized provenance rule as computeChangedFrontmatterFields:
-      // absent-in-snapshot-materializing-in-persisted is the disk scan
-      // catching a never-synced document up, not this write's own action.
-      if (before === STATE_FIELD_ABSENT && after !== STATE_FIELD_ABSENT) return false;
-      return stateFieldValuesDiffer(before, after);
-    }
-    const before = valueOf(snapshotFm, snapshotBody, field);
-    const after = valueOf(persistedFm, persistedBody, field);
-    if (before === null && after === null) return false;
-    if (before === null || after === null) return true;
-    return before.trim() !== after.trim();
-  };
+  const changed = (field: string): boolean =>
+    stateTargetChanged(snapshotFm, snapshotBody, persistedFm, persistedBody, field, sectionTargets);
 
   // Candidate set = `reported` ∪ every frontmatter key (dotted-leaf
   // granularity) whose persisted value differs from the snapshot, minus the
@@ -5076,6 +5141,435 @@ function reconcileReportedFields(
     reconciled.push(field);
   }
   return reconciled;
+}
+
+// ----------------------------------------------------------------------------
+// The verifying executor — ADR-4629 §8.2 + §8.3 (epic #4629, child C2, #4866)
+// ----------------------------------------------------------------------------
+//
+// C1 gave a write a declared `StateWriteIntent` (the assertions it must land
+// and the mutation scope it may touch) but nothing ENFORCED it. C2 adds the
+// executor that does, riding the existing seam (`syncAndPreserveStateMd`,
+// ADR-3408 §8.3) rather than beside it, and the pure verifier it is built on.
+//
+// NO BEHAVIOR CHANGE: no production caller constructs a `StateWriteIntent` yet
+// (that is C3+, ADR-4629 migration step 3). Every existing state verb still
+// travels `readModifyWriteStateMd` byte-for-byte as before.
+
+type StateWriteIntent = stateTransitionMod.StateWriteIntent;
+
+/** Why a verified write failed. A closed set, frozen like `ERROR_REASON`. */
+const STATE_WRITE_INTENT_FAILURE = Object.freeze({
+  /** §8.3: the delta reached a region outside the declared scope. */
+  OUT_OF_SCOPE: 'out_of_scope',
+  /** §8.2: a `required` assertion did not land. */
+  REQUIRED_ASSERTION_MISSED: 'required_assertion_missed',
+  /** §8.2: the re-read file is not the content that was verified and written. */
+  REREAD_MISMATCH: 'reread_mismatch',
+});
+
+type StateWriteIntentFailure = typeof STATE_WRITE_INTENT_FAILURE[keyof typeof STATE_WRITE_INTENT_FAILURE];
+
+/**
+ * One changed region outside the declared scope. Structured, not a prefixed
+ * string, so callers (C3+) match on fields rather than on a string grammar.
+ * `order` means the body's sections were reordered (`name` is empty).
+ */
+interface StateOutOfScopeRegion {
+  readonly region: 'frontmatter' | 'section' | 'preamble' | 'order';
+  readonly name: string;
+}
+
+interface StateWriteIntentVerification {
+  readonly ok: boolean;
+  readonly reasons: ReadonlyArray<StateWriteIntentFailure>;
+  /** §8.3: each changed region outside the declared scope. */
+  readonly outOfScope: ReadonlyArray<StateOutOfScopeRegion>;
+  /** §8.2: each `required` assertion's `field` that did not land. */
+  readonly missedRequired: ReadonlyArray<string>;
+}
+
+interface StateBodyUnit {
+  readonly text: string;
+  /** Heading level (1-6); 0 for the preamble. */
+  readonly level: number;
+  readonly region: StateOutOfScopeRegion;
+}
+
+/**
+ * Split a STATE.md body into leaf units for the §8.3 diff: the preamble before
+ * the first heading, then one unit per heading running to the NEXT heading of
+ * any level, in document order. Leaf granularity means a declared
+ * `## Accumulated Context` scope reaches its `### Decisions` child by heading
+ * level (`stateSectionScopeUnits`), while an undeclared sibling section stays a separate unit. Built on
+ * the markdown-sectionizer seam (ADR-1372), which is fence-aware, so a `#` line
+ * inside a code fence is not a heading. A repeated heading gets an occurrence
+ * suffix so neither shadows the other.
+ */
+function collectStateBodyUnits(body: string): Map<string, StateBodyUnit> {
+  const units = new Map<string, StateBodyUnit>();
+  const sections = collectSections(body, () => true);
+  const preambleEnd = sections.length > 0 ? sections[0].heading.offset : body.length;
+  units.set('(preamble)', { text: body.slice(0, preambleEnd).trim(), level: 0, region: { region: 'preamble', name: '' } });
+  const occurrences = new Map<string, number>();
+  for (const section of sections) {
+    const { heading } = section;
+    const base = `${'#'.repeat(heading.level)} ${heading.text}`;
+    const n = (occurrences.get(base) ?? 0) + 1;
+    occurrences.set(base, n);
+    units.set(n === 1 ? base : `${base} (#${n})`, {
+      text: section.body.trim(),
+      level: heading.level,
+      region: { region: 'section', name: heading.text },
+    });
+  }
+  return units;
+}
+
+/** The raw frontmatter region (everything before the body), for the unparseable-block case. */
+function stateFrontmatterRegion(content: string): string {
+  return content.slice(0, content.length - stripFrontmatter(content).length);
+}
+
+/**
+ * The unit a declared field lives in: the first unit, in document order, where
+ * `stateExtractField` resolves it. That mirrors `stateExtractField`'s own
+ * first-match reading of the whole body, so a declared `Status` covers the one
+ * line the seam treats as `Status`, and not a second `Status:` line elsewhere.
+ */
+function stateFieldOwnerUnit(units: Map<string, StateBodyUnit>, field: string): string | null {
+  for (const [key, unit] of units) {
+    if (stateExtractField(unit.text, field) !== null) return key;
+  }
+  return null;
+}
+
+/**
+ * The units a declared section covers: the FIRST unit, in document order, whose
+ * heading text is the declared name (the occurrence `readStateTarget` reads,
+ * through `collectSection`'s first match), plus every following unit nested
+ * under it by heading level. The section analogue of `stateFieldOwnerUnit`: a
+ * repeated heading of the same name, and that occurrence's children, are not
+ * covered, even though they sit under a heading with the same text.
+ */
+function stateSectionScopeUnits(units: Map<string, StateBodyUnit>, sectionTargets: ReadonlySet<string>): Set<string> {
+  const covered = new Set<string>();
+  const entries = [...units];
+  for (const name of sectionTargets) {
+    const start = entries.findIndex(([, u]) => u.region.region === 'section' && u.region.name === name);
+    if (start < 0) continue;
+    const ownerLevel = entries[start][1].level;
+    covered.add(entries[start][0]);
+    for (let i = start + 1; i < entries.length && entries[i][1].level > ownerLevel; i++) covered.add(entries[i][0]);
+  }
+  return covered;
+}
+
+/**
+ * ADR-4629 §8.2 + §8.3: verify one write against its declared intent. PURE —
+ * it compares two document sides and never touches disk.
+ *
+ * Both sides are first passed through `normalizeContent`, the OS projection
+ * seam's own normalization (CRLF strip, blank-line-run collapse, one trailing
+ * newline). `platformWriteSync` applies it to every STATE.md write, on this
+ * path and the legacy one alike, so it is the seam's behavior, not the
+ * intent's delta. Without it, a CRLF file would read as every section changed.
+ *
+ * §8.2 (verified post-state): every `required` assertion must land. With a
+ * declared `value`, "landed" means the target reads that value afterwards (an
+ * idempotent write that re-asserts the current value passes). Without one,
+ * "landed" means the target is still present AND measurably changed
+ * (`stateTargetChanged`, the measured-delta test `updated[]` uses); a deleted
+ * target has not landed. Best-effort assertions are NOT judged: their report
+ * bucket is ADR-4629 §8.4, an open question for Phase 3, so this result
+ * deliberately carries no best-effort field for a later phase to be bound by.
+ *
+ * §8.3 (bounded mutation): the delta must stay inside the declared scope.
+ *  - Body: diffed per leaf unit (`collectStateBodyUnits`). A changed unit is in
+ *    scope when it is the first occurrence of a section a declared
+ *    `target: 'section'` assertion names, or nested under that occurrence
+ *    (`stateSectionScopeUnits`). Otherwise it is in scope only when replaying the
+ *    post-values of the declared fields THAT UNIT OWNS (`stateFieldOwnerUnit`)
+ *    onto its pre text reproduces its post text, so any other edit in the same
+ *    section, or the same label in another section, is caught. A change in
+ *    section ORDER is its own out-of-scope region.
+ *  - Frontmatter: keys with a body source (`getFrontmatterBodySource`) are
+ *    judged through that source, because `syncStateFrontmatter` re-derives them
+ *    from the body on every write. When the seam's `bodyDeltas` show the source
+ *    moved, the body check above already bounded that move. A mirrored key that
+ *    changed with no body move, or with no `bodyDeltas` to show one, must be
+ *    declared. Every other key goes through `computeChangedFrontmatterFields`
+ *    (the reporter's rule: `last_updated` provenance exclusion, declared-leaf
+ *    materialization). A schema-declared key (a `FIELD_CLASSIFICATION` row)
+ *    that is absent before and present after is the seam catching a document
+ *    up, not the caller's action, the same provenance rule the reporter
+ *    applies. A key already present that the seam re-derives to a new value
+ *    (for example `progress.*` under `resync`) IS counted: §8.3 bounds what the
+ *    write changed, whoever computed it.
+ *  - A frontmatter key is declared when an assertion names it exactly, or when
+ *    it is one of the schema-declared leaves (`declaredLeavesOf`) of a key an
+ *    assertion names. Declaring `progress` therefore covers the closed set of
+ *    `progress.*` rows `FIELD_CLASSIFICATION` lists, the frontmatter analogue of
+ *    a `target: 'section'` assertion covering its child sections. Nothing else
+ *    widens: a declared leaf (`progress.percent`) never covers a sibling leaf,
+ *    and a dotted key outside the schema's leaf set is never covered by its
+ *    prefix.
+ *  - `scope: 'broad'` puts the WHOLE frontmatter in scope. That is ADR-4629
+ *    §8.3's own worked case (`milestoneSwitch` declares a whole-frontmatter
+ *    scope). The body stays bounded: broad is audited, not exempted.
+ *  - `kind: 'rebuild'` (`cmdStateSync`, `REGENERATE_STATE`) is unbounded by
+ *    contract (ADR-3408 §8.3; ADR-4629 §8.3 names those two and no more), so
+ *    §8.3 is skipped for it. §8.2 still applies.
+ *
+ * `Current Position` is always read as a whole section, in §8.2 and §8.3 alike,
+ * matching `readStateTarget`'s long-standing special case.
+ */
+function verifyStateWriteIntent(
+  intent: StateWriteIntent,
+  preContent: string,
+  postContent: string,
+  statePath: string,
+  bodyDeltas?: Record<string, { pre: string | null; post: string | null }>,
+): StateWriteIntentVerification {
+  const pre = normalizeContent(statePath, preContent).content;
+  const post = normalizeContent(statePath, postContent).content;
+  const preFm = extractFrontmatter(pre, statePath) as Record<string, unknown>;
+  const postFm = extractFrontmatter(post, statePath) as Record<string, unknown>;
+  const preBody = stripFrontmatter(pre);
+  const postBody = stripFrontmatter(post);
+
+  const isSection = (a: { field: string; target?: string }): boolean =>
+    a.target === 'section' || a.field === 'Current Position';
+  const sectionTargets = new Set<string>();
+  const fieldTargets = new Set<string>();
+  for (const a of intent.assertions) {
+    if (isSection(a)) sectionTargets.add(a.field);
+    else fieldTargets.add(a.field);
+  }
+
+  // §8.2 — required assertions.
+  const missedRequired: string[] = [];
+  for (const a of intent.assertions) {
+    if (a.requirement !== 'required') continue;
+    const targets = isSection(a) ? new Set([a.field]) : NO_SECTION_TARGETS;
+    const actual = readStateTarget(postFm, postBody, a.field, targets);
+    const landed = a.value !== undefined
+      ? actual !== null && actual.trim() === a.value.trim()
+      : actual !== null && stateTargetChanged(preFm, preBody, postFm, postBody, a.field, targets);
+    if (!landed) missedRequired.push(a.field);
+  }
+
+  // §8.3 — bounded mutation.
+  const outOfScope: StateOutOfScopeRegion[] = [];
+  if (intent.kind !== 'rebuild') {
+    if (intent.scope !== 'broad') {
+      const declared = (key: string): boolean => {
+        if (fieldTargets.has(key)) return true;
+        const dot = key.indexOf('.');
+        if (dot <= 0) return false;
+        const parent = key.slice(0, dot);
+        return fieldTargets.has(parent) && declaredLeavesOf(parent).includes(key);
+      };
+      if (isUnparseableFrontmatter(preFm) || isUnparseableFrontmatter(postFm)) {
+        // An unparseable block has no keys to diff; judge the raw region.
+        if (stateFrontmatterRegion(pre) !== stateFrontmatterRegion(post)) {
+          outOfScope.push({ region: 'frontmatter', name: '(unparseable block)' });
+        }
+      } else {
+        const schemaMaterialized = (key: string): boolean =>
+          Object.prototype.hasOwnProperty.call(FIELD_CLASSIFICATION, key)
+          && resolveFrontmatterPath(preFm, key) === STATE_FIELD_ABSENT
+          && resolveFrontmatterPath(postFm, key) !== STATE_FIELD_ABSENT;
+        // Non-body-sourced keys: `computeChangedFrontmatterFields` skips body-sourced
+        // keys entirely when handed no `bodyDeltas`; those are judged just below.
+        for (const key of computeChangedFrontmatterFields(preFm, postFm, undefined)) {
+          if (!declared(key) && !schemaMaterialized(key)) outOfScope.push({ region: 'frontmatter', name: key });
+        }
+        const topKeys = new Set([...Object.keys(preFm), ...Object.keys(postFm)]);
+        for (const key of topKeys) {
+          if (stateTransitionMod.getFrontmatterBodySource(key) === null) continue;
+          const before = resolveFrontmatterPath(preFm, key);
+          const after = resolveFrontmatterPath(postFm, key);
+          if (!stateFieldValuesDiffer(before, after)) continue;
+          if (before === STATE_FIELD_ABSENT) continue; // back-fill (the #1264 case), not the caller's action
+          const delta = bodyDeltas ? bodyDeltas[key] : undefined;
+          const bodyMoved = delta !== undefined
+            && stateFieldValuesDiffer(delta.pre ?? STATE_FIELD_ABSENT, delta.post ?? STATE_FIELD_ABSENT);
+          if (bodyMoved || declared(key)) continue;
+          outOfScope.push({ region: 'frontmatter', name: key });
+        }
+      }
+    }
+
+    const preUnits = collectStateBodyUnits(preBody);
+    const postUnits = collectStateBodyUnits(postBody);
+    const owners = new Map<string, string[]>();
+    for (const field of fieldTargets) {
+      const owner = stateFieldOwnerUnit(postUnits, field) ?? stateFieldOwnerUnit(preUnits, field);
+      if (owner !== null) owners.set(owner, [...(owners.get(owner) ?? []), field]);
+    }
+    const sectionScope = new Set([
+      ...stateSectionScopeUnits(preUnits, sectionTargets),
+      ...stateSectionScopeUnits(postUnits, sectionTargets),
+    ]);
+    for (const key of new Set([...preUnits.keys(), ...postUnits.keys()])) {
+      const before = preUnits.get(key);
+      const after = postUnits.get(key);
+      if (before !== undefined && after !== undefined && before.text === after.text) continue;
+      const unit = (after ?? before) as StateBodyUnit;
+      if (sectionScope.has(key)) continue;
+      if (before !== undefined && after !== undefined) {
+        let replayed = before.text;
+        for (const field of owners.get(key) ?? []) {
+          const next = stateExtractField(after.text, field);
+          if (next === null) continue;
+          const applied = stateReplaceField(replayed, field, next);
+          if (applied !== null) replayed = applied;
+        }
+        if (replayed.trim() === after.text) continue;
+      }
+      outOfScope.push(unit.region);
+    }
+    const preOrder = [...preUnits.keys()].filter((k) => postUnits.has(k));
+    const postOrder = [...postUnits.keys()].filter((k) => preUnits.has(k));
+    if (preOrder.join('\n') !== postOrder.join('\n')) outOfScope.push({ region: 'order', name: '' });
+  }
+
+  const reasons: StateWriteIntentFailure[] = [];
+  if (outOfScope.length > 0) reasons.push(STATE_WRITE_INTENT_FAILURE.OUT_OF_SCOPE);
+  if (missedRequired.length > 0) reasons.push(STATE_WRITE_INTENT_FAILURE.REQUIRED_ASSERTION_MISSED);
+  return Object.freeze({
+    ok: reasons.length === 0,
+    reasons: Object.freeze(reasons),
+    outOfScope: Object.freeze(outOfScope.map((r) => Object.freeze({ ...r }))),
+    missedRequired: Object.freeze(missedRequired),
+  });
+}
+
+const NO_UPDATED_FIELDS: ReadonlyArray<string> = Object.freeze([]);
+
+interface StateWriteIntentResult extends StateWriteIntentVerification {
+  /**
+   * True when content reached disk. A §8.2/§8.3 verification failure is found
+   * before the write and leaves the file untouched (`false`); the one
+   * `ok: false` arm with `true` is `reread_mismatch`.
+   */
+  readonly written: boolean;
+  /** Measured disk delta (`reconcileReportedFields`, extended to sections). Empty unless verified and written. */
+  readonly updated: ReadonlyArray<string>;
+}
+
+/**
+ * ADR-4629 §8.2 + §8.3: apply a declared `StateWriteIntent` through the one
+ * write seam and fail loud instead of reporting success.
+ *
+ * Under ONE lock (the same `acquireStateLock` `readModifyWriteStateMd` holds):
+ *   read -> transform -> `syncAndPreserveStateMd` (the owned composition,
+ *   driven by the intent's own `resync` / `deriveProgressKeys` /
+ *   `explicitProgressField`) -> verify the would-be content -> write only if
+ *   it verified -> re-read -> confirm the re-read file is exactly the verified
+ *   content (§8.2 verifies against the re-read file) -> report `updated[]`
+ *   from the measured disk delta.
+ * A §8.2/§8.3 violation is refused BEFORE the write, so the file is left
+ * untouched. The re-read check is the one failure found AFTER the write: if
+ * the re-read does not match what was verified, the result is
+ * `reasons: ['reread_mismatch']` with `written: true`. The file is NOT restored
+ * on that arm: the write reached disk but is not verified, and the result says
+ * so rather than attempting a restore through a write path that would itself
+ * normalize the bytes. Its `outOfScope` / `missedRequired` are empty, because
+ * the candidate content itself verified; what failed is the disk round-trip.
+ *
+ * "Loud" means the result, not an exception: a verification failure is a
+ * frozen `ok: false` value naming each reason, never a success payload.
+ * Turning that into a non-zero exit is the CLI caller's job, which lands with
+ * the first migrated caller (C3+). Construction errors (no intent, a rebuild
+ * intent) throw, like `createStateTransaction`'s.
+ *
+ * A transform whose output is byte-identical to its input is the #948 no-op:
+ * nothing is written, but the intent is still verified, so a `required`
+ * assertion that expected a change reports as missed rather than passing.
+ *
+ * Scope fence (C2): open-kind intents only. The two `rebuild` writers stay on
+ * `writeStateMd`, the sanctioned exception path (ADR-3408 §8.3). The intent's
+ * `snapshot` is not compared against the file read under the lock;
+ * optimistic concurrency on the prior value is outside ADR-4629 §8 as written.
+ */
+function applyStateWriteIntent(
+  statePath: string,
+  intent: StateWriteIntent,
+  transformFn: (content: string) => string,
+  cwd: string,
+  options: { authoritativeFm?: Record<string, unknown> } = {},
+  clock?: StateLockClock,
+): StateWriteIntentResult {
+  // Checked on an `unknown` view: `Array.isArray` on the typed ReadonlyArray would narrow it to `any[]`.
+  if (intent === null || typeof intent !== 'object' || !Array.isArray((intent as { assertions?: unknown }).assertions)) {
+    const err = new Error(
+      'applyStateWriteIntent: a StateWriteIntent is required (build it with createStateWriteIntent). ' +
+      'Per ADR-4629 §8.1, an absent intent is a construction failure, not an unverified write.',
+    ) as Error & { code: string };
+    err.code = 'STATE_WRITE_INTENT_REQUIRED';
+    throw err;
+  }
+  if (intent.kind === 'rebuild') {
+    const err = new Error(
+      'applyStateWriteIntent: a rebuild intent cannot travel the preservation seam. The two rebuild ' +
+      'writers (cmdStateSync, REGENERATE_STATE) stay on writeStateMd per ADR-3408 §8.3; ADR-4629 §8.3 ' +
+      'treats them as unbounded by contract.',
+    ) as Error & { code: string };
+    err.code = 'STATE_TRANSACTION_KIND_INVALID';
+    throw err;
+  }
+
+  const lockPath = acquireStateLock(statePath, clock);
+  try {
+    const pre = platformReadSync(statePath) || '';
+    const transformed = transformFn(pre);
+    const unwritten = (verification: StateWriteIntentVerification): StateWriteIntentResult =>
+      Object.freeze({ ...verification, written: false, updated: NO_UPDATED_FIELDS });
+
+    if (transformed === pre) {
+      return unwritten(verifyStateWriteIntent(intent, pre, pre, statePath));
+    }
+
+    const preWriteState: StatePreWriteSnapshot = {};
+    const candidate = syncAndPreserveStateMd(pre, transformed, statePath, cwd, {
+      resync: intent.resync,
+      deriveProgressKeys: intent.deriveProgressKeys,
+      explicitProgressField: intent.explicitProgressField,
+      authoritativeFm: options.authoritativeFm,
+      preWriteState,
+    });
+    const verification = verifyStateWriteIntent(intent, pre, candidate, statePath, preWriteState.bodyDeltas);
+    if (!verification.ok) return unwritten(verification);
+
+    platformWriteSync(statePath, candidate);
+    const reread = platformReadSync(statePath) || '';
+    if (reread !== normalizeContent(statePath, candidate).content) {
+      return Object.freeze({
+        ok: false,
+        reasons: Object.freeze([STATE_WRITE_INTENT_FAILURE.REREAD_MISMATCH]),
+        outOfScope: verification.outOfScope,
+        missedRequired: verification.missedRequired,
+        written: true,
+        updated: NO_UPDATED_FIELDS,
+      });
+    }
+
+    const sectionTargets = new Set(
+      intent.assertions.filter((a) => a.target === 'section' || a.field === 'Current Position').map((a) => a.field),
+    );
+    const updated = reconcileReportedFields(
+      statePath,
+      preWriteState,
+      intent.assertions.map((a) => a.field),
+      [],
+      sectionTargets,
+    );
+    return Object.freeze({ ...verification, written: true, updated: Object.freeze(updated) });
+  } finally {
+    releaseStateLock(lockPath);
+  }
 }
 
 function cmdStateJson(cwd: string, raw: boolean): void {
@@ -5186,6 +5680,22 @@ function cmdStateJson(cwd: string, raw: boolean): void {
 }
 
 /**
+ * 1-based position of the first plan with no summary, when SOME of the phase's plans already have
+ * one (a gap-closure re-entry: plans 1..17 are done and 18 and 19 are the gap plans, #4945).
+ * `null` when no plan is summarized yet, when every plan is, or when the phase directory cannot be
+ * found: the phase then starts at plan 1, exactly as before. Plans and summaries are paired by the
+ * phase locator's own rule, so this agrees with `init` and `phase-plan-index`.
+ */
+function firstPlanToRun(cwd: string, phaseNumber: string | number): number | null {
+  const located = phaseLocatorMod.findPhaseInternal(cwd, String(phaseNumber));
+  if (!located || !located.found) return null;
+  const { plans, incomplete_plans: incomplete } = located;
+  if (incomplete.length === 0 || incomplete.length === plans.length) return null;
+  const index = plans.indexOf(incomplete[0]);
+  return index === -1 ? null : index + 1;
+}
+
+/**
  * Update STATE.md when a new phase begins execution.
  * Updates body text fields (Current focus, Status, Last Activity, Current Position)
  * and synchronizes frontmatter via writeStateMd.
@@ -5233,6 +5743,8 @@ function cmdStateBeginPhase(cwd: string, phaseNumber: string | number | null | u
     phaseNumber: phaseNumber as string | number,
     phaseName: phaseName ?? null,
     planCount: planCount ?? null,
+    // #4945: a gap-closure re-entry starts at the first plan still to run, not at plan 1.
+    startPlan: firstPlanToRun(cwd, phaseNumber as string | number),
   };
   const deps: StateTransitionDeps = {
     clock: realClock,
@@ -6967,6 +7479,12 @@ export = {
   // pinning the table it reads (`_FRONTMATTER_KEY_TO_BODY_LABEL`) against
   // itself.
   _bodyLabelFor: bodyLabelFor,
+  // ADR-4629 §8.2/§8.3 (epic #4629, C2 #4866): the verifying executor and its
+  // pure verifier. No production caller constructs a StateWriteIntent yet (C3+),
+  // so these are reached only by their positive-control tests.
+  applyStateWriteIntent,
+  _verifyStateWriteIntent: verifyStateWriteIntent,
+  STATE_WRITE_INTENT_FAILURE,
   // Test seam (audit M1): inject a deterministic isPidAlive so the liveness-gated
   // steal decision is exercised without real pids. Mirrors capability-lock.cts.
   _setLockProbes(probes: Partial<{ isPidAlive: (pid: number) => boolean }>): void {
