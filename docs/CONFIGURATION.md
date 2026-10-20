@@ -571,7 +571,7 @@ When `/gsd-execute-phase` runs a wave containing several independent plans, it c
 | Isolation | Runtimes | What happens |
 |---|---|---|
 | `harness-worktree` | `claude`, `cursor` | The runtime's own harness creates and binds a git worktree per executor. GSD passes the host's isolation flag and runs no git itself. |
-| `orchestrator-worktree` | `codex`, `opencode`, `kimi`, `kimi-code` | The runtime has no harness-native isolation, but exposes a headless exec that accepts a working directory. **GSD** creates the worktree, spawns each executor into it, then validates and merges the result. All git operations are performed by GSD, never by the sandboxed executor. |
+| `orchestrator-worktree` | `codex`, `opencode`, `kimi`, `kimi-code`, `kiro` | The runtime has no harness-native isolation, but exposes a headless exec that accepts a working directory. **GSD** creates the worktree, spawns each executor into it, then validates and merges the result. All git operations are performed by GSD, never by the sandboxed executor. |
 | `none` | every other runtime | No isolation primitive — plans in a wave run sequentially. Setting `workflow.use_worktrees: true` here fails closed before any executor is dispatched. |
 
 You do not configure this directly: set `workflow.use_worktrees` and GSD negotiates the rest. `use_worktrees: false` forces sequential execution on **every** runtime, including the ones that support isolation. An unknown or undeclared isolation value always degrades to sequential — GSD never guesses its way into an unisolated parallel run.

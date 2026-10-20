@@ -804,7 +804,7 @@ EoS migration status (#2101, ADR-1239): ZCode's install is fully dogfooded throu
 | dispatch.background | undocumented | searched: https://kiro.dev/docs/custom-agents/subagents/ | "Sub-agents run in parallel, each working independently", but no background (non-blocking) dispatch primitive is documented. |
 | dispatch.subagentToolkit | full | https://kiro.dev/docs/custom-agents/subagents/ | "The default sub-agent has the same built-in tools as the main agent - `read`, `write`, `shell`, `web_search`, `web_fetch`, and any configured MCP tools." |
 | dispatch.backgroundDispatch | undocumented | searched: https://kiro.dev/docs/custom-agents/subagents/ | No documented background-dispatch primitive; fails closed to `false` in negotiation. |
-| dispatch.isolation | none | https://kiro.dev/docs/custom-agents/subagents/ | No worktree or other per-sub-agent isolation is documented. |
+| dispatch.isolation | orchestrator-worktree | `kiro-cli chat --help` (CLI 2.x: `--no-interactive`, `--trust-all-tools`, `--model`, positional `[INPUT]`) ; ADR-1239 §Codex-binding amendment | Sub-agents expose no worktree/cwd parameter, but `kiro-cli chat --no-interactive --trust-all-tools "<prompt>"` is a headless exec that binds to the spawned process's working directory (no cwd flag, like `kimi-code`). GSD creates, validates and merges the worktree itself and spawns the executor into it (#2584). |
 | dispatch.maxConcurrency | undocumented | searched: https://kiro.dev/docs/custom-agents/subagents/ | Parallel sub-agents are documented but no concurrency bound is stated; fails closed to `1` in negotiation (#3673). |
 
 Sources consulted:

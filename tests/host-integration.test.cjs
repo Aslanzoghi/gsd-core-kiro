@@ -1911,7 +1911,7 @@ describe('#2584 orchestratorExec — parity / divergence guard', () => {
     }
     // Sanity: the sweep actually found the 4 known hosts (guards a broken sweep
     // silently matching zero capabilities and passing vacuously).
-    assert.deepEqual(orchestratorWorktreeHosts.sort(), ['codex', 'kimi', 'kimi-code', 'opencode']);
+    assert.deepEqual(orchestratorWorktreeHosts.sort(), ['codex', 'kimi', 'kimi-code', 'kiro', 'opencode']);
   });
 
   // #2627: the two guards below encode the per-host research that found two
@@ -1929,6 +1929,10 @@ describe('#2584 orchestratorExec — parity / divergence guard', () => {
       opencode: ['run'],
       kimi: ['--print'],
       'kimi-code': [],
+      // Kiro: `kiro-cli chat` alone opens the interactive chat; `--no-interactive`
+      // makes it headless and `--trust-all-tools` stops it blocking on tool
+      // approval prompts nobody can answer. Binds cwd via the process (no flag).
+      kiro: ['chat', '--no-interactive', '--trust-all-tools'],
     };
     for (const [id, leadingArgs] of Object.entries(expected)) {
       const cap = loadCapability(id);
