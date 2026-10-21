@@ -200,3 +200,84 @@ describe('#4624 worktree worker lifecycle records', () => {
     assert.equal(complete.exitCode, 0);
   });
 });
+
+
+// Windows dispatch-blocking regression: on Windows a Node detached spawn leaks
+// the caller's stdout pipe into the worker, so a host shell tool reading that
+// pipe blocked until the WORKER exited. Plans then ran one at a time and the
+// orchestrator session stalled. `spawn-worker` must return while the worker
+// is still running, with its output in the log and its exit code persisted.
+describe('worktree spawn-worker: non-blocking launch + record', () => {
+  const fs = require('node:fs');
+  const { spawnSync } = require('node:child_process');
+  const { cmdWorktreeSpawnWorker, quoteWindowsArg } = require('../gsd-core/bin/lib/worktree-safety.cjs');
+  let dir;
+
+  beforeEach(() => { dir = createTempDir('spawn-worker'); });
+  afterEach(() => { cleanup(dir); });
+
+  test('quoteWindowsArg round-trips through CommandLineToArgvW rules', () => {
+    assert.equal(quoteWindowsArg('plain'), 'plain');
+    assert.equal(quoteWindowsArg(''), '""');
+    assert.equal(quoteWindowsArg('a b'), '"a b"');
+    assert.equal(quoteWindowsArg('say "hi"'), '"say \\"hi\\""');
+    assert.equal(quoteWindowsArg('C:\\dir with space\\'), '"C:\\dir with space\\\\"');
+  });
+
+  test('rejects missing flags and a bad exec descriptor without spawning', () => {
+    const calls = [];
+    const deps = { write: () => {}, writeErr: () => {}, childProcess: { spawn: () => calls.push('spawn'), execFileSync: () => calls.push('exec') } };
+    const prior = process.exitCode;
+    cmdWorktreeSpawnWorker(dir, ['--path', 'wt'], deps);
+    assert.equal(process.exitCode, 2);
+    fs.writeFileSync(path.join(dir, 'bad.json'), '{"exec":{"command":"x"}}');
+    cmdWorktreeSpawnWorker(dir, ['--path', 'wt', '--exec-json', 'bad.json', '--plan', '01', '--summary-path', 'S.md'], deps);
+    assert.equal(process.exitCode, 2);
+    process.exitCode = prior;
+    assert.deepEqual(calls, []);
+  });
+
+  test('refuses to spawn over a RUNNING record (never re-dispatch)', () => {
+    const wt = path.join(dir, 'wt');
+    fs.writeFileSync(`${wt}.worker.json`, JSON.stringify({ state: 'running', pid: 1 }));
+    fs.writeFileSync(path.join(dir, 'e.json'), JSON.stringify({ command: 'node', args: [], cwd: dir }));
+    const calls = [];
+    let out = '';
+    const prior = process.exitCode;
+    cmdWorktreeSpawnWorker(dir, ['--path', wt, '--exec-json', 'e.json', '--plan', '01', '--summary-path', 'S.md'],
+      { write: (s) => { out += s; }, writeErr: () => {}, childProcess: { spawn: () => calls.push('spawn'), execFileSync: () => calls.push('exec') } });
+    assert.equal(process.exitCode, 1);
+    process.exitCode = prior;
+    assert.equal(JSON.parse(out).reason, 'already_running');
+    assert.deepEqual(calls, []);
+  });
+
+  test('CLI returns while the worker still runs; log, exit code and record land beside the worktree', async () => {
+    const { setTimeout: delay } = require('node:timers/promises');
+    const wt = path.join(dir, 'agent-p01-1');
+    fs.mkdirSync(wt);
+    // The worker blocks until the test creates `release`, so "spawn-worker
+    // returned while the worker was still running" is deterministic.
+    const release = path.join(dir, 'release');
+    const workerSrc = `console.log("worker & <ok> | 100%"); const f=${JSON.stringify(release)}; const t=setInterval(()=>{ if(require("fs").existsSync(f)){ clearInterval(t); process.exit(3); } }, 100);`;
+    const exec = { exec: { command: process.execPath, args: ['-e', workerSrc], cwd: wt } };
+    fs.writeFileSync(path.join(dir, 'exec.json'), JSON.stringify(exec));
+    // Piped stdio: exactly the shape of a host shell tool reading our stdout to EOF.
+    // Before the fix this call could not return until the worker exited.
+    const r = spawnSync(process.execPath, [GSD_TOOLS, 'query', 'worktree', 'spawn-worker', '--path', wt,
+      '--exec-json', path.join(dir, 'exec.json'), '--plan', '01', '--summary-path', path.join(dir, 'S.md')],
+    { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: PROBE_TIMEOUT_MS * 4 });
+    assert.equal(r.error, undefined, 'spawn-worker blocked on the worker (timed out)');
+    assert.equal(r.status, 0, r.stderr);
+    const res = JSON.parse(r.stdout);
+    assert.equal(res.ok, true);
+    assert.equal(fs.existsSync(`${wt}.worker.exit`), false, 'worker must still be running when spawn-worker returns');
+    assert.equal(JSON.parse(fs.readFileSync(`${wt}.worker.json`, 'utf8')).state, 'running');
+
+    fs.writeFileSync(release, '');
+    for (let i = 0; i < 120 && !fs.existsSync(`${wt}.worker.exit`); i++) await delay(250);
+    assert.equal(fs.readFileSync(`${wt}.worker.exit`, 'utf8').trim(), '3');
+    assert.match(fs.readFileSync(`${wt}.worker.log`, 'utf8'), /worker & <ok> \| 100%/);
+    assert.equal(fs.existsSync(`${wt}.spawn.json`), false, 'spawn spec (holds env) must be deleted by the launcher');
+  });
+});

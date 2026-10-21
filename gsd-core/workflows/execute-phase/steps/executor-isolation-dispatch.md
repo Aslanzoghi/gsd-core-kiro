@@ -316,9 +316,18 @@ CREATE_JSON=$(gsd_run query worktree.create \
 # 2. Resolve the host's headless-exec argv for that worktree. Descriptor
 #    data — command, args, cwd flag and prompt flag all come from the
 #    capability descriptor, so no host is named here.
+#    The full prompt is always persisted BESIDE the worktree. A composed
+#    prompt is often >100 KB, past the Windows 32,767-char CreateProcess
+#    limit, so when it is large the argv carries a short pointer to the file.
+PROMPT_FILE="${WT_PATH}.prompt.md"
+printf '%s' "$EXECUTOR_PROMPT" > "$PROMPT_FILE"
+ARGV_PROMPT="$EXECUTOR_PROMPT"
+if [ "${#EXECUTOR_PROMPT}" -gt 24000 ]; then
+  ARGV_PROMPT="You are a GSD gsd-executor. Your COMPLETE instructions (objective, embedded execute-plan workflow, role definition, required reading, success criteria) are in the file ${PROMPT_FILE} - read that entire file first, in chunks if needed, and follow it exactly. Your working directory is your git worktree; stay in it."
+fi
 EXEC_JSON=$(gsd_run query dispatch-isolation --json \
   --cwd-target "$WT_PATH" \
-  --prompt "$EXECUTOR_PROMPT")
+  --prompt "$ARGV_PROMPT")
 
 # 3. MANDATORY fail-closed check. `dispatch-isolation` degrades to
 #    isolation:"none" / exec:null rather than exiting non-zero, so the
@@ -340,24 +349,34 @@ fi
 
 `worktree create` records the entry in `$WAVE_WORKTREE_MANIFEST` itself, so **do not** call `worktree.record-agent` for these plans — that verb is the harness-path counterpart, used because the harness creates the worktree behind GSD's back. Double-recording is deduped by path+branch, but the create verb is the single writer here.
 
-Spawn `EXEC_JSON`'s `command` + `args` as a background process with its working directory set to `EXEC_JSON.cwd`, capturing the PID (`WORKER_PID=$!`) and redirecting stdout+stderr into a per-worker log placed BESIDE the worktree — `${WT_PATH}.worker.log`, not inside it: cleanup removes the worktree, and the log plus the lifecycle record must survive it. The `cwd` is returned for **every** host, including those whose descriptor has no cwd flag (`cwdFlag: null`) and therefore bind through the process's own working directory — always set it, never assume the flag did the job. Launch from a shell that has `cd`'d into it (`cd "$cwd" && command args &`), not from a process API that only sets the child's working directory: OpenCode 2.x resolves its directory from `$PWD` and ignores a bare cwd change, so a stale inherited `$PWD` would bind the worker to the main checkout.
-
-**Record the launch before any wait (#4624).** A bare background `wait` left the wave with no durable lifecycle: when the orchestrator's turn ended first, a finished worker sat undiscovered and a blocked one sat unreported, and a resumed session had nothing to recover from. Immediately after the spawn — before waiting on anything — persist the launch identity and result location:
+**Spawn and record through `worktree.spawn-worker` — never hand-roll the background launch.** Do not use `command args &`, `Start-Process`, or a Node `spawn({detached:true})` script. On Windows each of those leaks the caller's stdout pipe into the worker, so the host's shell tool (Kiro's included) blocks until the WORKER exits: plans run one at a time, and a long worker outlives the tool timeout and stalls the orchestrator session. The verb launches the worker with no inherited handles (WMI on Windows, a detached spawn elsewhere), sets the working directory and `$PWD` to `EXEC_JSON.cwd`, writes stdout+stderr to `${WT_PATH}.worker.log` and the exit code to `${WT_PATH}.worker.exit`, both BESIDE the worktree so they survive cleanup. It records the launch before returning (#4624). It returns in seconds:
 
 ```bash
-WORKER_LOG="${WT_PATH}.worker.log"
-gsd_run query worktree.worker-record \
+EXEC_FILE="${WT_PATH}.exec.json"
+printf '%s' "$EXEC_JSON" > "$EXEC_FILE"
+SPAWN_JSON=$(gsd_run query worktree.spawn-worker \
   --path "$WT_PATH" \
-  --pid "$WORKER_PID" \
+  --exec-json "$EXEC_FILE" \
   --plan "{plan_number}" \
   --summary-path "{phase_dir}/{plan_padded}-SUMMARY.md" \
-  --log-file "$WORKER_LOG" || {
-    echo "FATAL: worker launch not recorded for plan {plan_number} — either a running record already exists for this worktree (a resumed session dispatched it: reconcile that worker per completion-reconciliation.md, never spawn a second one) or the record write failed (surface the error output)." >&2
+  --log-file "${WT_PATH}.worker.log") || {
+    echo "FATAL: worker spawn/record failed for plan {plan_number}: $SPAWN_JSON — if the reason is already_running, a resumed session dispatched it: reconcile that worker per completion-reconciliation.md, never spawn a second one." >&2
     exit 1
   }
+WORKER_PID=$(printf '%s' "$SPAWN_JSON" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(String(JSON.parse(s).pid)))')
 ```
 
-**Wait until terminal, reconcile BEFORE recording the outcome (#4217/#4624).** Wait for the wave's executors to reach a terminal process state (`wait` on the captured PIDs, or poll `worktree.worker-status --root "${ORCH_ROOT}/.claude/worktrees"` and read `pidAlive`). While a worker's record is `running`, it is a reconciliation candidate the moment its process dies — a crash between classification and recording can never strand it. So the ordering is: run the **existing** artifact reconciliation (`execute-phase/steps/completion-reconciliation.md`) FIRST — SUMMARY + plan-scoped commits + branch state decide the outcome: a worker that exits 0 with no artifacts is not done, and one that exits non-zero with artifacts complete may still merge. Merge artifact-complete workers through the manifest-only gauntlet below; preserve a blocked/failed worktree untouched. Only then record the terminal outcome, carrying the recovery information:
+Dispatch EVERY runnable plan in the wave this way (one `spawn-worker` call per plan, back to back) BEFORE waiting on any of them. Then poll, one short tool call at a time, with each call kept well under the host's tool timeout (for example `sleep 60` followed by one status read). Never block a single tool call on a worker:
+
+```bash
+gsd_run query worktree.worker-status --root "${ORCH_ROOT}/.claude/worktrees"
+```
+
+A worker is terminal once its `pidAlive` is `false`. Its exit code is in `${WT_PATH}.worker.exit`; if that file is missing, the launcher was killed, so treat the exit code as unknown and let artifact reconciliation decide.
+
+(Older installed shim without `spawn-worker`: fall back to `cd "$cwd" && command args > log 2>&1 &` plus `worktree.worker-record --path "$WT_PATH" --pid "$WORKER_PID" --plan "{plan_number}" --summary-path "{phase_dir}/{plan_padded}-SUMMARY.md" --log-file "$WORKER_LOG"`. On Windows that fallback blocks the tool call, as described above.)
+
+**Wait until terminal, reconcile BEFORE recording the outcome (#4217/#4624).** Wait for the wave's executors to reach a terminal process state (poll `worktree.worker-status --root "${ORCH_ROOT}/.claude/worktrees"` and read `pidAlive`). While a worker's record is `running`, it is a reconciliation candidate the moment its process dies — a crash between classification and recording can never strand it. So the ordering is: run the **existing** artifact reconciliation (`execute-phase/steps/completion-reconciliation.md`) FIRST — SUMMARY + plan-scoped commits + branch state decide the outcome: a worker that exits 0 with no artifacts is not done, and one that exits non-zero with artifacts complete may still merge. Merge artifact-complete workers through the manifest-only gauntlet below; preserve a blocked/failed worktree untouched. Only then record the terminal outcome, carrying the recovery information:
 
 ```bash
 gsd_run query worktree.worker-complete --path "$WT_PATH" --exit-code "$WORKER_EXIT" \

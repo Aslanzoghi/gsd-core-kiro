@@ -10,6 +10,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import childProcess from 'node:child_process';
 import { execGit as execGitSeam, posixNormalize, type SpawnResultOutput } from './shell-command-projection.cjs';
 import { isContainedIn } from './security.cjs';
 
@@ -2894,6 +2895,197 @@ function cmdWorktreeWorkerRecord(cwd: string, args: string[] = [], deps: Record<
   write(`${JSON.stringify({ ok: true, record }, null, 2)}\n`);
 }
 
+// ─── Worker spawn (Windows-safe, non-blocking) ───────────────────────────────
+// On Windows, `spawn(..., { detached: true })` still creates the child with
+// bInheritHandles=TRUE, so the caller's inheritable stdout/stderr pipe leaks
+// into the worker. Host shell tools (Kiro's included) read the tool's stdout
+// pipe until EOF, so the dispatch call blocks until the WORKER exits: the
+// orchestrator cannot fan out, and a long worker outlives the host's tool
+// timeout and stalls the session. `spawn-worker` launches through WMI
+// (Win32_Process.Create) on Windows — the worker is parented by the WMI
+// service and shares no handles with the caller — and returns at once with
+// the pid recorded. POSIX keeps a plain detached spawn (fds are CLOEXEC).
+
+/** Quote one argv element per the MSVCRT/CommandLineToArgvW rules. */
+function quoteWindowsArg(arg: string): string {
+  if (arg.length > 0 && !/[\s"]/.test(arg)) return arg;
+  let out = '"';
+  let backslashes = 0;
+  for (const ch of arg) {
+    if (ch === '\\') { backslashes++; continue; }
+    if (ch === '"') { out += '\\'.repeat(backslashes * 2 + 1) + '"'; backslashes = 0; continue; }
+    out += '\\'.repeat(backslashes) + ch;
+    backslashes = 0;
+  }
+  return `${out}${'\\'.repeat(backslashes * 2)}"`;
+}
+
+// Runs as `node <wt>.launcher.cjs <spec.json>`: binds the worker's stdio to the
+// log, waits for it, and persists the exit code beside the worktree so the
+// orchestrator's reconciliation can read it after a turn boundary.
+const WORKER_LAUNCHER_SOURCE = `'use strict';
+const fs = require('fs');
+const { spawn } = require('child_process');
+const specPath = process.argv[2];
+const spec = JSON.parse(fs.readFileSync(specPath, 'utf8'));
+try { fs.unlinkSync(specPath); } catch {}
+const fd = fs.openSync(spec.logFile, 'a');
+const child = spawn(spec.command, spec.args, {
+  cwd: spec.cwd, stdio: ['ignore', fd, fd], windowsHide: true,
+  env: Object.assign({}, process.env, spec.env || {}, { PWD: spec.cwd }),
+});
+const done = (code) => { try { fs.writeFileSync(spec.exitFile, String(code)); } catch {} process.exit(0); };
+child.on('error', (e) => { try { fs.writeSync(fd, '[gsd-launcher] spawn error: ' + e.message + '\\n'); } catch {} done(127); });
+child.on('exit', (code, signal) => done(code === null ? (signal ? 128 : 1) : code));
+`;
+
+interface SpawnWorkerExec { command: string; args: string[]; cwd: string }
+
+function launchViaWmi(commandLine: string, cwd: string, runSync: typeof import('node:child_process').execFileSync): number {
+  // Parameters travel through the environment, never the PowerShell source,
+  // so no prompt/path content is ever interpreted by PowerShell.
+  const ps = '$r = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{ CommandLine = $env:GSD_SPAWN_CMDLINE; CurrentDirectory = $env:GSD_SPAWN_CWD }; if ($r.ReturnValue -ne 0) { [Console]::Error.Write("Win32_Process.Create returned " + $r.ReturnValue); exit 1 }; [Console]::Out.Write($r.ProcessId)';
+  const out = runSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', ps], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    env: { ...process.env, GSD_SPAWN_CMDLINE: commandLine, GSD_SPAWN_CWD: cwd },
+    timeout: 60000,
+  });
+  const pid = Number(String(out).trim());
+  if (!Number.isInteger(pid) || pid <= 0) throw new Error(`WMI launch returned no pid: ${String(out).trim()}`);
+  return pid;
+}
+
+/**
+ * Usage: worktree spawn-worker --path <worktree> --exec-json <file> --plan <n>
+ *          --summary-path <path> [--log-file <path>]
+ * --exec-json is a file holding `dispatch-isolation --json` output (or a bare
+ * {command,args,cwd}). Spawns the worker without blocking the caller, then
+ * records it exactly as `worker-record` does. Prints {ok,pid,logFile,exitFile,method}.
+ */
+function cmdWorktreeSpawnWorker(cwd: string, args: string[] = [], deps: Record<string, unknown> = {}): void {
+  const flag = (name: string): string => {
+    const i = args.indexOf(name);
+    if (i < 0 || i + 1 >= args.length) return '';
+    return args[i + 1];
+  };
+  const write = (deps.write as ((s: string) => void)) || ((s: string) => process.stdout.write(s));
+  const writeErr = (deps.writeErr as ((s: string) => void)) || ((s: string) => process.stderr.write(s));
+  const fail = (reason: string, detail: string, code = 1): void => {
+    writeErr(`[gsd] worktree.spawn-worker: ${reason} — ${detail}\n`);
+    write(`${JSON.stringify({ ok: false, reason, error: detail }, null, 2)}\n`);
+    process.exitCode = code;
+  };
+
+  const worktreeArg = flag('--path');
+  const execFile = flag('--exec-json');
+  const plan = flag('--plan');
+  const summaryPath = flag('--summary-path');
+  if (!worktreeArg || !execFile || !plan || !summaryPath) {
+    writeErr('Usage: worktree spawn-worker --path <worktree> --exec-json <file> --plan <plan_number> --summary-path <path> [--log-file <path>]\n');
+    process.exitCode = 2;
+    return;
+  }
+  const worktreePath = path.resolve(cwd, worktreeArg);
+  const logFile = path.resolve(cwd, flag('--log-file') || `${worktreePath}.worker.log`);
+  const exitFile = `${worktreePath}.worker.exit`;
+
+  let exec: SpawnWorkerExec;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.resolve(cwd, execFile), 'utf8')) as { exec?: Partial<SpawnWorkerExec> } & Partial<SpawnWorkerExec>;
+    const e: Partial<SpawnWorkerExec> | undefined = parsed && parsed.exec ? parsed.exec : parsed;
+    if (!e || typeof e.command !== 'string' || !Array.isArray(e.args) || typeof e.cwd !== 'string') {
+      throw new Error('exec descriptor must carry command, args[], cwd');
+    }
+    exec = { command: e.command, args: e.args.map(String), cwd: e.cwd };
+  } catch (err) {
+    fail('bad_exec_json', (err as Error).message, 2);
+    return;
+  }
+
+  // Refuse before spawning if a running record exists (#4624 duplicate guard).
+  try {
+    const existing = JSON.parse(fs.readFileSync(workerRecordPath(worktreePath), 'utf8')) as WorkerRecord;
+    if (existing && existing.state === 'running') {
+      fail('already_running', 'A worker is already recorded RUNNING for this worktree — reconcile it, never re-dispatch.');
+      return;
+    }
+  } catch { /* no record yet */ }
+
+  const platform = (deps.platform as string) || process.platform;
+  const cp = (deps.childProcess as typeof import('node:child_process')) || childProcess;
+  let pid = 0;
+  let method = '';
+  try { fs.rmSync(exitFile, { force: true }); } catch { /* stale exit marker */ }
+
+  const launcherFile = `${worktreePath}.launcher.cjs`;
+  const specFile = `${worktreePath}.spawn.json`;
+  const nodeExe = (deps.nodePath as string) || process.execPath;
+  const writeLaunch = (): void => {
+    fs.writeFileSync(launcherFile, WORKER_LAUNCHER_SOURCE);
+    // The spec carries the caller env (WMI children do not inherit it); it is
+    // owner-only and the launcher deletes it before starting the worker.
+    fs.writeFileSync(specFile, JSON.stringify({ ...exec, logFile, exitFile, env: process.env }), { mode: 0o600 });
+  };
+
+  if (platform === 'win32') {
+    const cmdLine = [exec.command, ...exec.args].map(quoteWindowsArg).join(' ');
+    if (cmdLine.length > 32000) {
+      fail('command_line_too_long', `worker command line is ${cmdLine.length} chars (Windows limit 32767). Write the full prompt to ${worktreePath}.prompt.md and pass a short pointer prompt to dispatch-isolation.`);
+      return;
+    }
+    try {
+      writeLaunch();
+      const launcherCmd = [nodeExe, launcherFile, specFile].map(quoteWindowsArg).join(' ');
+      const runSync = (deps.execFileSync as typeof import('node:child_process').execFileSync) || cp.execFileSync;
+      pid = launchViaWmi(launcherCmd, exec.cwd, runSync);
+      method = 'wmi';
+    } catch (err) {
+      try { fs.rmSync(specFile, { force: true }); } catch { /* best effort */ }
+      fail('spawn_failed', `WMI launch failed: ${(err as Error).message}`);
+      return;
+    }
+  } else {
+    try {
+      writeLaunch();
+      const child = cp.spawn(nodeExe, [launcherFile, specFile], {
+        cwd: exec.cwd, detached: true, stdio: 'ignore', env: { ...process.env, PWD: exec.cwd },
+      });
+      child.unref();
+      pid = child.pid || 0;
+      method = 'detached';
+    } catch (err) {
+      try { fs.rmSync(specFile, { force: true }); } catch { /* best effort */ }
+      fail('spawn_failed', (err as Error).message);
+      return;
+    }
+    if (!pid) { fail('spawn_failed', 'no pid returned'); return; }
+  }
+
+  // Record the launch before returning (#4624) — same record worker-record writes.
+  const record: WorkerRecord = {
+    agentId: path.basename(worktreePath),
+    pid,
+    plan,
+    worktreePath,
+    summaryPath: path.resolve(cwd, summaryPath),
+    logFile,
+    startedAt: new Date().toISOString(),
+    state: 'running',
+    exitCode: null,
+    note: '',
+    completedAt: null,
+  };
+  try {
+    writeWorkerRecord(workerRecordPath(worktreePath), record, deps);
+  } catch (err) {
+    fail('write_failed', `worker pid ${pid} launched but not recorded: ${(err as Error).message}`);
+    return;
+  }
+  write(`${JSON.stringify({ ok: true, pid, method, logFile, exitFile, record }, null, 2)}\n`);
+}
+
 function workerStatusView(
   record: WorkerRecord,
   deps: Record<string, unknown> = {}
@@ -3135,6 +3327,8 @@ export = {
   cmdWorktreeReapOrphans,
   workerRecordPath,
   cmdWorktreeWorkerRecord,
+  cmdWorktreeSpawnWorker,
+  quoteWindowsArg,
   cmdWorktreeWorkerStatus,
   cmdWorktreeWorkerComplete,
   resolveWorktreeRoot,
