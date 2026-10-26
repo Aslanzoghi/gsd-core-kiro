@@ -4412,11 +4412,12 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
   // options-bag signature `(content, {isAgent, modelOverride})`). All three
   // are genuinely new agent converters (not renamed/leftover), so the agent
   // count grows from 11 to 14; the 16 command/skill/workflow converters are
-  // unchanged.
-  // Kiro: convertClaudeCommandToKiroSkill + convertClaudeAgentToKiroAgent → 17 + 15.
-  test('VALID_CONVERTER_NAMES has exactly 32 entries (17 command/skill/workflow + 15 agent converters)', () => {
+  // unchanged. #5547 adds convertClaudeCommandToPiSkill (pi's skills kind), so
+  // the command/skill/workflow count grows from 16 to 17.
+  // Kiro: convertClaudeCommandToKiroSkill + convertClaudeAgentToKiroAgent are included in the 17 + 17.
+  test('VALID_CONVERTER_NAMES has exactly 34 entries (17 command/skill/workflow + 17 agent converters)', () => {
     assert.ok(VALID_CONVERTER_NAMES instanceof Set, 'VALID_CONVERTER_NAMES must be a Set');
-    assert.strictEqual(VALID_CONVERTER_NAMES.size, 32, 'VALID_CONVERTER_NAMES must have exactly 32 entries, got: ' + VALID_CONVERTER_NAMES.size);
+    assert.strictEqual(VALID_CONVERTER_NAMES.size, 34, 'VALID_CONVERTER_NAMES must have exactly 34 entries, got: ' + VALID_CONVERTER_NAMES.size);
   });
 
   test('VALID_CONVERTER_NAMES contains all expected converter names', () => {
@@ -4434,6 +4435,7 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       'convertClaudeCommandToKiloSkill',
       'convertClaudeCommandToKimiSkill',
       'convertClaudeCommandToOpencodeSkill',
+      'convertClaudeCommandToPiSkill',
       'convertClaudeCommandToTraeSkill',
       'convertClaudeCommandToWindsurfSkill',
       'convertClaudeCommandToWindsurfWorkflow',
@@ -4457,6 +4459,7 @@ describe('ADR-857 phase 5e: VALID_CONVERTER_NAMES closed enum', () => {
       // converter, and the kilo/opencode agent converters (shared name with
       // those runtimes' commands-kind entries).
       'convertClaudeAgentToHermesAgent',
+      'convertClaudeAgentToPiAgent',
       'convertClaudeToKiloFrontmatter',
       'convertClaudeToOpencodeFrontmatter',
     ];
